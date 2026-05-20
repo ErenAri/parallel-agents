@@ -3,9 +3,14 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # 1. Run tests first
@@ -17,7 +22,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: |
+          python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          python -m ruff check src tests
           python -m pytest tests/ -v
 
   # 2. Publish to PyPI
@@ -45,6 +52,9 @@ jobs:
   npm:
     needs: pypi  # wait for PyPI so postinstall can find the package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: npm-wrapper
@@ -56,7 +66,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Publish to npm
-        run: npm publish
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -102,8 +112,10 @@ jobs:
 
   # 5. Create GitHub Release with binaries
   release:
-    needs: binaries
+    needs: [binaries, pypi, npm]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 

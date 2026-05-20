@@ -29,3 +29,6 @@ This package is a thin Node.js wrapper that:
 3. Forwards all CLI arguments to the Python CLI
 
 For full documentation, see the [Python package on PyPI](https://pypi.org/project/parallel-agents/).
+
+Project repository: <https://github.com/ErenAri/parallel-agents>  
+Issue tracker: <https://github.com/ErenAri/parallel-agents/issues>

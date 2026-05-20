@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-21
+
 ### Added
 - Configurable permission mode (`PA_PERMISSION_MODE`) with safe default (`default`).
 - Configurable parse retries (`PA_PARSE_RETRY_ATTEMPTS`) for planner, judge, and workers.
@@ -14,11 +16,20 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - CLI integration test coverage for `run`, `workers`, `show`, `history`, and `mcp-install`.
 - Patch tool tests and expanded pipeline/GitHub happy-path tests.
 - Explicit CLI run exit-code matrix for auth/parse/worker/no-patch/apply failures.
+- Contributor-facing project docs:
+  - `CONTRIBUTING.md`
+  - `SECURITY.md`
+  - `SUPPORT.md`
+  - `.github/CODEOWNERS`
+  - `.github/pull_request_template.md`
 
 ### Changed
 - Cost tracking now records planner/worker/judge usage and reported costs.
 - README now includes first-run checklist, run options, strengths/limitations, and exit codes.
 - Lint and test hygiene improvements across src/tests.
+- Packaging metadata now points to `ErenAri/parallel-agents` and includes organization-friendly project URLs.
+- npm wrapper metadata now includes homepage, bugs URL, and provenance-enabled publish config.
+- Release workflow now publishes npm with provenance and pinned public access.
 
 ## [0.3.0] - 2026-05-20
 
