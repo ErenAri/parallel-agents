@@ -1,0 +1,21 @@
+{
+  "run_id": "2ae76e4f9b31",
+  "created_at": "2026-05-20 17:22:42.254568+00:00",
+  "input": {
+    "raw_input": "Test the security and review",
+    "input_type": "free_text",
+    "repo_path": "C:\\tmp\\mock-repo",
+    "github_url": null
+  },
+  "status": "completed",
+  "phases": {
+    "planning": {
+      "status": "completed",
+      "started_at": "2026-05-20T17:22:42.256510+00:00",
+      "completed_at": "2026-05-20T17:22:42.258773+00:00"
+    }
+  },
+  "workers_invoked": [],
+  "total_tokens": 0,
+  "total_cost_usd": 0.0
+}

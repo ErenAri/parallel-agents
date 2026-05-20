@@ -1,0 +1,33 @@
+{
+  "worker_name": "review",
+  "subtask_id": "s2",
+  "status": "success",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "test",
+      "title": "review finding",
+      "description": "Found by review",
+      "file_path": "src/main.py",
+      "line_range": null,
+      "evidence": null
+    }
+  ],
+  "recommendations": [
+    {
+      "type": "code_change",
+      "description": "review recommendation",
+      "file_path": "src/main.py",
+      "suggested_content": "# fixed code",
+      "rationale": "best practice",
+      "priority": "should"
+    }
+  ],
+  "raw_output": "{\"findings\": [{\"severity\": \"medium\", \"category\": \"test\", \"title\": \"review finding\", \"description\": \"Found by review\", \"file_path\": \"src/main.py\"}], \"recommendations\": [{\"type\": \"code_change\", \"description\": \"review recommendation\", \"file_path\": \"src/main.py\", \"suggested_content\": \"# fixed code\", \"rationale\": \"best practice\", \"priority\": \"should\"}]}",
+  "started_at": "2026-05-20 17:25:17.176216+00:00",
+  "completed_at": "2026-05-20 17:25:17.176216+00:00",
+  "token_usage": {
+    "input_tokens": 1000,
+    "output_tokens": 500
+  }
+}

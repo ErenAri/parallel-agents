@@ -1,0 +1,7 @@
+{"phase": "planning", "status": "started", "ts": "2026-05-20T17:25:26.837900+00:00"}
+{"phase": "planning", "status": "completed", "ts": "2026-05-20T17:25:26.837900+00:00", "subtask_count": 2}
+{"phase": "splitting", "status": "completed", "ts": "2026-05-20T17:25:26.850887+00:00", "batch_count": 1, "batches": [["security", "review"]]}
+{"phase": "execution", "batch": 1, "workers": ["security", "review"], "status": "started", "ts": "2026-05-20T17:25:26.850887+00:00"}
+{"phase": "execution", "batch": 1, "status": "completed", "ts": "2026-05-20T17:25:26.856235+00:00", "results": {"security": "success", "review": "success"}}
+{"phase": "judging", "status": "started", "ts": "2026-05-20T17:25:26.856235+00:00"}
+{"phase": "judging", "status": "completed", "ts": "2026-05-20T17:25:26.856235+00:00", "risk_items": 1, "has_patch": true}
