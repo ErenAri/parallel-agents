@@ -1,0 +1,88 @@
+{
+  "summary": "Analysis complete: 2 findings across 2 workers",
+  "risk_report": [
+    {
+      "severity": "medium",
+      "category": "test",
+      "title": "security finding",
+      "description": "Found by security",
+      "file_path": null,
+      "line_range": null,
+      "evidence": null
+    }
+  ],
+  "patch": "--- a/src/main.py\n+++ b/src/main.py\n@@ -1 +1 @@\n-old\n+new",
+  "pr_summary": "## Summary\n- Fixed security issue\n- Improved code quality",
+  "worker_results": {
+    "security": {
+      "worker_name": "security",
+      "subtask_id": "s1",
+      "status": "success",
+      "findings": [
+        {
+          "severity": "medium",
+          "category": "test",
+          "title": "security finding",
+          "description": "Found by security",
+          "file_path": "src/main.py",
+          "line_range": null,
+          "evidence": null
+        }
+      ],
+      "recommendations": [
+        {
+          "type": "code_change",
+          "description": "security recommendation",
+          "file_path": "src/main.py",
+          "suggested_content": "# fixed code",
+          "rationale": "best practice",
+          "priority": "should"
+        }
+      ],
+      "raw_output": "{\"findings\": [{\"severity\": \"medium\", \"category\": \"test\", \"title\": \"security finding\", \"description\": \"Found by security\", \"file_path\": \"src/main.py\"}], \"recommendations\": [{\"type\": \"code_change\", \"description\": \"security recommendation\", \"file_path\": \"src/main.py\", \"suggested_content\": \"# fixed code\", \"rationale\": \"best practice\", \"priority\": \"should\"}]}",
+      "started_at": "2026-05-20 17:25:26.850887+00:00",
+      "completed_at": "2026-05-20 17:25:26.850887+00:00",
+      "token_usage": {
+        "input_tokens": 1000,
+        "output_tokens": 500
+      }
+    },
+    "review": {
+      "worker_name": "review",
+      "subtask_id": "s2",
+      "status": "success",
+      "findings": [
+        {
+          "severity": "medium",
+          "category": "test",
+          "title": "review finding",
+          "description": "Found by review",
+          "file_path": "src/main.py",
+          "line_range": null,
+          "evidence": null
+        }
+      ],
+      "recommendations": [
+        {
+          "type": "code_change",
+          "description": "review recommendation",
+          "file_path": "src/main.py",
+          "suggested_content": "# fixed code",
+          "rationale": "best practice",
+          "priority": "should"
+        }
+      ],
+      "raw_output": "{\"findings\": [{\"severity\": \"medium\", \"category\": \"test\", \"title\": \"review finding\", \"description\": \"Found by review\", \"file_path\": \"src/main.py\"}], \"recommendations\": [{\"type\": \"code_change\", \"description\": \"review recommendation\", \"file_path\": \"src/main.py\", \"suggested_content\": \"# fixed code\", \"rationale\": \"best practice\", \"priority\": \"should\"}]}",
+      "started_at": "2026-05-20 17:25:26.850887+00:00",
+      "completed_at": "2026-05-20 17:25:26.850887+00:00",
+      "token_usage": {
+        "input_tokens": 1000,
+        "output_tokens": 500
+      }
+    }
+  },
+  "conflicts_resolved": [],
+  "metadata": {
+    "total_cost_usd": 0.01
+  }
+}

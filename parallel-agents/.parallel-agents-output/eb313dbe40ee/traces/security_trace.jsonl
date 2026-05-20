@@ -1,0 +1,3 @@
+{"event": "worker_started", "subtask_id": "s1", "ts": "2026-05-20T17:25:17.175215+00:00"}
+{"event": "worker_completed", "subtask_id": "s1", "status": "success", "ts": "2026-05-20T17:25:17.176216+00:00"}
+{"status": "success", "findings": 1, "recommendations": 1, "ts": "2026-05-20T17:25:17.178220+00:00"}
