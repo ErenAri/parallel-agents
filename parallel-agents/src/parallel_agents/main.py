@@ -341,5 +341,57 @@ def init() -> None:
     click.echo("\nCopy the above into .parallel-agents.toml (as TOML) or set PA_ env vars.")
 
 
+@cli.command(name="mcp")
+def mcp_serve() -> None:
+    """Start the MCP server (stdio transport).
+
+    Used by AI coding tools (Claude Code, Cursor, Windsurf, Codex CLI,
+    Cline, Continue, Amazon Q, Zed) to access parallel-agents as a tool.
+
+    Setup: parallel-agents mcp-install <tool-name>
+    """
+    try:
+        from parallel_agents.mcp_server import run_server
+    except ImportError:
+        console.print(
+            "[red]MCP support requires the 'mcp' package.[/red]\n"
+            "Install with: [bold]pip install parallel-agents\\[mcp][/bold]"
+        )
+        sys.exit(1)
+    run_server()
+
+
+@cli.command(name="mcp-install")
+@click.argument(
+    "target",
+    type=click.Choice([
+        "claude-code", "cursor", "windsurf", "cline", "continue",
+        "codex", "amazon-q", "zed", "all",
+    ]),
+)
+@click.option(
+    "--scope",
+    type=click.Choice(["project", "user"]),
+    default="project",
+    help="Config scope (applies to claude-code only).",
+)
+def mcp_install(target: str, scope: str) -> None:
+    """Install parallel-agents as an MCP server for an AI coding tool.
+
+    Generates the correct config file for the specified tool so it can
+    discover and use parallel-agents' analysis tools.
+
+    \b
+    Examples:
+        parallel-agents mcp-install claude-code
+        parallel-agents mcp-install cursor
+        parallel-agents mcp-install all --scope user
+    """
+    from parallel_agents.mcp_installer import install_for_target
+
+    result = install_for_target(target, scope=scope)
+    console.print(result)
+
+
 if __name__ == "__main__":
     cli()
