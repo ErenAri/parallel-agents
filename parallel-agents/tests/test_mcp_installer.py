@@ -65,7 +65,7 @@ def test_install_claude_code_project(tmp_home):
     assert "mcpServers" in config
     assert "parallel-agents" in config["mcpServers"]
     assert "command" in config["mcpServers"]["parallel-agents"]
-    assert "✓" in result
+    assert "OK" in result
 
 
 def test_install_claude_code_user(tmp_home):
