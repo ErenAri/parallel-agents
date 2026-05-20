@@ -1,0 +1,37 @@
+{
+  "name": "parallel-agents",
+  "version": "0.2.0",
+  "description": "Parallel multi-agent pipeline for code analysis and transformation, powered by Claude",
+  "keywords": [
+    "ai",
+    "agents",
+    "claude",
+    "code-analysis",
+    "parallel",
+    "multi-agent",
+    "llm",
+    "security",
+    "code-review"
+  ],
+  "license": "MIT",
+  "author": "parallel-agents contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ErenAri/pa"
+  },
+  "bin": {
+    "parallel-agents": "./bin/cli.js"
+  },
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "README.md",
+    "LICENSE"
+  ]
+}

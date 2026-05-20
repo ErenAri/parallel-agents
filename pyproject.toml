@@ -5,8 +5,26 @@ build-backend = "hatchling.build"
 [project]
 name = "parallel-agents"
 version = "0.2.0"
-description = "Parallel multi-agent pipeline for code analysis and transformation"
+description = "Parallel multi-agent pipeline for code analysis and transformation, powered by Claude"
+readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
+authors = [
+    {name = "parallel-agents contributors"},
+]
+keywords = ["ai", "agents", "claude", "code-analysis", "parallel", "multi-agent", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
 dependencies = [
     "anthropic>=0.52.0",
     "claude-code-sdk>=0.1.0",
@@ -21,13 +39,22 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
+    "pyinstaller>=6.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ErenAri/pa"
+Repository = "https://github.com/ErenAri/pa"
+Issues = "https://github.com/ErenAri/pa/issues"
 
 [project.scripts]
 parallel-agents = "parallel_agents.main:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/parallel_agents"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/parallel_agents", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
