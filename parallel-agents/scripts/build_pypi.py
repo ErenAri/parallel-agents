@@ -9,27 +9,55 @@ Usage:
 
 import subprocess
 import sys
+from pathlib import Path
+import shutil
+
+ROOT = Path(__file__).resolve().parents[1]
+
+def run(cmd: list[str]) -> None:
+    print("$ " + " ".join(cmd))
+    subprocess.check_call(cmd, cwd=ROOT)
 
 
-def run(cmd: str) -> None:
-    print(f"$ {cmd}")
-    subprocess.check_call(cmd, shell=True)
+def clean_build_artifacts() -> None:
+    shutil.rmtree(ROOT / "dist", ignore_errors=True)
+    shutil.rmtree(ROOT / "build", ignore_errors=True)
+    for pattern in ("*.egg-info", "src/*.egg-info"):
+        for path in ROOT.glob(pattern):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.exists():
+                path.unlink()
 
 
 def main() -> None:
     action = sys.argv[1] if len(sys.argv) > 1 else "build"
 
     # Clean previous builds
-    run("python -m pip install --upgrade build twine")
-    run("rm -rf dist/ build/ *.egg-info src/*.egg-info")
+    run([sys.executable, "-m", "pip", "install", "--upgrade", "build", "twine"])
+    clean_build_artifacts()
 
     # Build
-    run("python -m build")
+    run([sys.executable, "-m", "build"])
+
+    dist_files = sorted((ROOT / "dist").glob("*"))
+    if not dist_files:
+        raise SystemExit("No distribution artifacts were generated in dist/")
 
     if action == "publish":
-        run("python -m twine upload dist/*")
+        run([sys.executable, "-m", "twine", "upload", *[str(p) for p in dist_files]])
     elif action == "test":
-        run("python -m twine upload --repository testpypi dist/*")
+        run(
+            [
+                sys.executable,
+                "-m",
+                "twine",
+                "upload",
+                "--repository",
+                "testpypi",
+                *[str(p) for p in dist_files],
+            ]
+        )
     else:
         print("\nBuilt successfully! Artifacts in dist/")
         print("  To publish: python scripts/build_pypi.py publish")

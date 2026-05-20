@@ -41,7 +41,7 @@ npx parallel-agents run --repo ./my-project "Fix security issues"
 
 ### Standalone binary
 
-Download from [GitHub Releases](https://github.com/ErenAri/pa/releases) - no Python required.
+Download from [GitHub Releases](https://github.com/ErenAri/parallel-agents/releases) - no Python required.
 
 ## First Run Checklist
 
@@ -164,10 +164,13 @@ export PA_STORE_BACKEND=sqlite
 - GitHub issue mode requires `gh` installation and authentication.
 - Output quality still depends on model behavior and repository context quality.
 
-## Release Docs
+## Project Docs
 
 - [CHANGELOG.md](CHANGELOG.md)
 - [COMPATIBILITY.md](COMPATIBILITY.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [SUPPORT.md](SUPPORT.md)
 
 ## Exit Codes
 
