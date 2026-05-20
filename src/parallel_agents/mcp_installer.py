@@ -84,14 +84,14 @@ def install_claude_code(scope: str = "project") -> str:
         config.setdefault("mcpServers", {})
         config["mcpServers"]["parallel-agents"] = entry
         _write_json(config_path, config)
-        return f"[green]✓[/green] Claude Code (user): wrote {config_path}"
+        return f"[green]OK[/green] Claude Code (user): wrote {config_path}"
     else:
         config_path = Path.cwd() / ".mcp.json"
         config = _read_json(config_path)
         config.setdefault("mcpServers", {})
         config["mcpServers"]["parallel-agents"] = entry
         _write_json(config_path, config)
-        return f"[green]✓[/green] Claude Code (project): wrote {config_path}"
+        return f"[green]OK[/green] Claude Code (project): wrote {config_path}"
 
 
 def install_cursor() -> str:
@@ -102,7 +102,7 @@ def install_cursor() -> str:
     config.setdefault("mcpServers", {})
     config["mcpServers"]["parallel-agents"] = _server_entry(cmd)
     _write_json(config_path, config)
-    return f"[green]✓[/green] Cursor: wrote {config_path}"
+    return f"[green]OK[/green] Cursor: wrote {config_path}"
 
 
 def install_windsurf() -> str:
@@ -113,7 +113,7 @@ def install_windsurf() -> str:
     config.setdefault("mcpServers", {})
     config["mcpServers"]["parallel-agents"] = _server_entry(cmd)
     _write_json(config_path, config)
-    return f"[green]✓[/green] Windsurf: wrote {config_path}"
+    return f"[green]OK[/green] Windsurf: wrote {config_path}"
 
 
 def install_cline() -> str:
@@ -124,7 +124,7 @@ def install_cline() -> str:
     config.setdefault("mcpServers", {})
     config["mcpServers"]["parallel-agents"] = _server_entry(cmd)
     _write_json(config_path, config)
-    return f"[green]✓[/green] Cline: wrote {config_path}"
+    return f"[green]OK[/green] Cline: wrote {config_path}"
 
 
 def install_continue() -> str:
@@ -152,7 +152,7 @@ def install_continue() -> str:
 
     config["mcpServers"] = servers
     _write_json(config_path, config)
-    return f"[green]✓[/green] Continue: wrote {config_path}"
+    return f"[green]OK[/green] Continue: wrote {config_path}"
 
 
 def install_codex() -> str:
@@ -196,7 +196,7 @@ args = {args_toml}
 """
 
     config_path.write_text(existing + new_section, encoding="utf-8")
-    return f"[green]✓[/green] Codex CLI: wrote {config_path}"
+    return f"[green]OK[/green] Codex CLI: wrote {config_path}"
 
 
 def install_amazon_q() -> str:
@@ -207,7 +207,7 @@ def install_amazon_q() -> str:
     config.setdefault("mcpServers", {})
     config["mcpServers"]["parallel-agents"] = _server_entry(cmd)
     _write_json(config_path, config)
-    return f"[green]✓[/green] Amazon Q: wrote {config_path}"
+    return f"[green]OK[/green] Amazon Q: wrote {config_path}"
 
 
 def install_zed() -> str:
@@ -230,7 +230,7 @@ def install_zed() -> str:
     config.setdefault("context_servers", {})
     config["context_servers"]["parallel-agents"] = _server_entry(cmd)
     _write_json(config_path, config)
-    return f"[green]✓[/green] Zed: wrote {config_path}"
+    return f"[green]OK[/green] Zed: wrote {config_path}"
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +269,7 @@ def install_for_target(target: str, scope: str = "project") -> str:
                     msg = installer()
                 results.append(msg)
             except Exception as e:
-                results.append(f"[red]✗[/red] {name}: {e}")
+                results.append(f"[red]FAIL[/red] {name}: {e}")
         return "\n".join(results)
 
     installer = INSTALLER_MAP.get(target)
@@ -282,4 +282,4 @@ def install_for_target(target: str, scope: str = "project") -> str:
             return installer(scope=scope)
         return installer()
     except Exception as e:
-        return f"[red]✗[/red] {target}: {e}"
+        return f"[red]FAIL[/red] {target}: {e}"
