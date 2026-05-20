@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-21
+
+### Changed
+- Align PyPI release version with npm release `0.4.1`.
+- Update package metadata version markers (`pyproject.toml`, `parallel_agents.__version__`).
+
 ## [0.4.0] - 2026-05-21
 
 ### Added
