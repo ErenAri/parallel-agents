@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -12,12 +13,21 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from parallel_agents.config import PipelineConfig, WorkerConfig
+from parallel_agents.config import PipelineConfig
 from parallel_agents.evidence_store import create_evidence_store
 from parallel_agents.models import FinalOutput
+from parallel_agents.patch_tools import apply_unified_diff
 from parallel_agents.pipeline import Pipeline
 
 console = Console()
+
+EXIT_SUCCESS = 0
+EXIT_RUNTIME_FAILURE = 1
+EXIT_AUTH_FAILURE = 2
+EXIT_PARSE_FAILURE = 3
+EXIT_WORKER_FAILURE = 4
+EXIT_NO_PATCH = 5
+EXIT_PATCH_APPLY_FAILURE = 6
 
 
 class StreamingProgress:
@@ -158,7 +168,14 @@ def cli() -> None:
 @click.option("--disable-workers", "-d", default=None, help="Comma-separated list of workers to disable")
 @click.option("--output", "-o", type=click.Choice(["rich", "json", "patch"]), default="rich")
 @click.option("--model", "-m", default=None, help="Override model for all agents")
+@click.option(
+    "--permission-mode",
+    type=click.Choice(["default", "acceptEdits", "plan", "bypassPermissions"]),
+    default=None,
+    help="Override Claude Code permission mode for planner/workers/judge.",
+)
 @click.option("--store", "-s", type=click.Choice(["file", "sqlite"]), default="file", help="Evidence store backend")
+@click.option("--apply-patch/--no-apply-patch", default=False, help="Apply generated patch to repository via git apply.")
 @click.option("--streaming/--no-streaming", default=True, help="Enable/disable streaming progress")
 def run(
     task: str,
@@ -167,7 +184,9 @@ def run(
     disable_workers: str | None,
     output: str,
     model: str | None,
+    permission_mode: str | None,
     store: str,
+    apply_patch: bool,
     streaming: bool,
 ) -> None:
     """Run the parallel agent pipeline on a task."""
@@ -188,23 +207,58 @@ def run(
         config.judge_model = model
         for wc in config.workers.values():
             wc.model = model
+    if permission_mode:
+        config.permission_mode = permission_mode
 
     pipeline = Pipeline(config)
 
-    if streaming and output == "rich":
-        progress = StreamingProgress()
-        live = progress.start()
-        with live:
-            result = asyncio.run(
-                pipeline.run(task, repo_path=repo, on_status=progress.update)
-            )
-    else:
-        def _print_status(msg: str) -> None:
-            console.print(f"[bold blue]>[/bold blue] {msg}")
+    try:
+        if streaming and output == "rich":
+            progress = StreamingProgress()
+            live = progress.start()
+            with live:
+                result = asyncio.run(
+                    pipeline.run(task, repo_path=repo, on_status=progress.update)
+                )
+        else:
+            def _print_status(msg: str) -> None:
+                console.print(f"[bold blue]>[/bold blue] {msg}")
 
-        result = asyncio.run(
-            pipeline.run(task, repo_path=repo, on_status=_print_status)
-        )
+            result = asyncio.run(
+                pipeline.run(task, repo_path=repo, on_status=_print_status)
+            )
+    except Exception as exc:
+        exit_code = _classify_exception_exit_code(exc)
+        click.echo(f"Run failed: {exc}", err=True)
+        sys.exit(exit_code)
+
+    if apply_patch:
+        repo_path_for_apply = _resolve_repo_path(repo, task)
+        if not repo_path_for_apply:
+            click.echo(
+                "Cannot apply patch without repository path. "
+                "Pass --repo or use a directory as task input.",
+                err=True,
+            )
+            sys.exit(1)
+        if not result.patch:
+            click.echo("No patch available to apply.", err=True)
+            sys.exit(EXIT_NO_PATCH)
+
+        applied, message = apply_unified_diff(repo_path_for_apply, result.patch)
+        result.metadata["patch_apply"] = {
+            "requested": True,
+            "repo_path": repo_path_for_apply,
+            "applied": applied,
+            "message": message,
+        }
+        if not applied:
+            click.echo(f"Patch apply failed: {message}", err=True)
+            sys.exit(EXIT_PATCH_APPLY_FAILURE)
+        if output == "rich":
+            console.print(f"[bold green]{message}[/bold green]")
+    else:
+        result.metadata["patch_apply"] = {"requested": False}
 
     if output == "json":
         click.echo(json.dumps(result.model_dump(), indent=2, default=str))
@@ -213,9 +267,13 @@ def run(
             click.echo(result.patch)
         else:
             click.echo("No patch generated.", err=True)
-            sys.exit(1)
+            sys.exit(EXIT_NO_PATCH)
     else:
         _display_results(result)
+
+    exit_code = _classify_result_exit_code(result)
+    if exit_code != EXIT_SUCCESS:
+        sys.exit(exit_code)
 
 
 @cli.command(name="workers")
@@ -277,7 +335,7 @@ def show(run_id: str, store: str, output_dir: str) -> None:
         results = evidence_store.load_all_worker_results()
         if results:
             for name, result in results.items():
-                console.print(f"\n[bold]{name}[/bold]: {result.status} — "
+                console.print(f"\n[bold]{name}[/bold]: {result.status} - "
                               f"{len(result.findings)} findings, {len(result.recommendations)} recs")
 
 
@@ -327,8 +385,8 @@ def history(store: str, output_dir: str) -> None:
             if d.is_dir():
                 table.add_row(
                     d.name,
-                    "✓" if (d / "manifest.json").exists() else "✗",
-                    "✓" if (d / "final_output.json").exists() else "✗",
+                    "yes" if (d / "manifest.json").exists() else "no",
+                    "yes" if (d / "final_output.json").exists() else "no",
                 )
         console.print(table)
 
@@ -391,6 +449,50 @@ def mcp_install(target: str, scope: str) -> None:
 
     result = install_for_target(target, scope=scope)
     console.print(result)
+
+
+def _resolve_repo_path(repo: str | None, task: str) -> str | None:
+    if repo:
+        return repo
+    if Path(task).is_dir():
+        return task
+    return None
+
+
+def _classify_exception_exit_code(exc: Exception) -> int:
+    message = str(exc).lower()
+    auth_markers = [
+        "unauthorized",
+        "authentication",
+        "anthropic_api_key",
+        "api_key",
+        "api key",
+        "invalid api key",
+    ]
+    if any(marker in message for marker in auth_markers):
+        return EXIT_AUTH_FAILURE
+    return EXIT_RUNTIME_FAILURE
+
+
+def _classify_result_exit_code(result: FinalOutput) -> int:
+    if _has_parse_failure(result):
+        return EXIT_PARSE_FAILURE
+    if any(worker_result.status == "error" for worker_result in result.worker_results.values()):
+        return EXIT_WORKER_FAILURE
+    return EXIT_SUCCESS
+
+
+def _has_parse_failure(result: FinalOutput) -> bool:
+    summary = result.summary.lower()
+    if "failed to parse" in summary or "parse error" in summary:
+        return True
+
+    for worker_result in result.worker_results.values():
+        if worker_result.status != "partial" or not worker_result.token_usage:
+            continue
+        if worker_result.token_usage.get("parsed_structured_output") == 0:
+            return True
+    return False
 
 
 if __name__ == "__main__":

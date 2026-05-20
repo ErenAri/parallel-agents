@@ -1,7 +1,6 @@
 """GitHub integration tools for fetching issues and posting PR comments.
 
 Uses the `gh` CLI for authentication (no token management needed).
-Falls back to the GitHub REST API via httpx if `gh` is not available.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ import logging
 import re
 import shutil
 from dataclasses import dataclass
-from typing import Any
 
 logger = logging.getLogger("parallel_agents.github")
 
@@ -84,7 +82,7 @@ async def fetch_issue(url: str) -> GitHubIssue | None:
             number=data["number"],
             title=data["title"],
             body=data.get("body", ""),
-            labels=[l["name"] for l in data.get("labels", [])],
+            labels=[label["name"] for label in data.get("labels", [])],
             state=data.get("state", ""),
             url=data.get("url", url),
             comments=[

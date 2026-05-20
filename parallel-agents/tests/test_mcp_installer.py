@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -70,7 +68,7 @@ def test_install_claude_code_project(tmp_home):
 
 def test_install_claude_code_user(tmp_home):
     """Should write to ~/.claude.json for user scope."""
-    result = install_claude_code(scope="user")
+    install_claude_code(scope="user")
 
     config_path = tmp_home / ".claude.json"
     assert config_path.exists()

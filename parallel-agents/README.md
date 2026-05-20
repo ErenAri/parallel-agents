@@ -6,24 +6,21 @@ Fan out code analysis to 8 specialist AI agents running concurrently, then merge
 
 ## Architecture
 
-```
+```text
 User Task / GitHub Issue / Repo
-        ↓
-   Planner Agent (analyzes repo, creates task plan)
-        ↓
-   Task Splitter (dependency resolution, batch grouping)
-        ↓
-   Parallel Workers (asyncio fan-out)
-    ┌──────────┬──────────┬──────────┬──────────┐
-    │ Security │ Test     │ Perf     │ DevOps   │
-    │ Arch     │ Docs     │ Code     │ Review   │
-    └──────────┴──────────┴──────────┴──────────┘
-        ↓
-   Evidence Store (JSON / SQLite)
-        ↓
-   Judge Agent (merge, resolve conflicts, produce patch)
-        ↓
-   Final Output (patch + PR summary + risk report)
+  |
+Planner Agent (analyzes repo, creates task plan)
+  |
+Task Splitter (dependency resolution, batch grouping)
+  |
+Parallel Workers (asyncio fan-out):
+  security, test, perf, devops, arch, docs, code, review
+  |
+Evidence Store (JSON / SQLite)
+  |
+Judge Agent (merge, resolve conflicts, produce patch)
+  |
+Final Output (patch + PR summary + risk report)
 ```
 
 ## Installation
@@ -44,7 +41,15 @@ npx parallel-agents run --repo ./my-project "Fix security issues"
 
 ### Standalone binary
 
-Download from [GitHub Releases](https://github.com/ErenAri/pa/releases) — no Python required.
+Download from [GitHub Releases](https://github.com/ErenAri/pa/releases) - no Python required.
+
+## First Run Checklist
+
+1. Install package with `pip install parallel-agents`.
+2. Install Claude Code CLI and complete authentication.
+3. If using GitHub issue URLs, install GitHub CLI and run `gh auth login`.
+4. Run `parallel-agents workers` to verify worker config.
+5. Run `parallel-agents run --repo ./my-project "Review for security and quality issues"`.
 
 ## Quick Start
 
@@ -85,7 +90,9 @@ parallel-agents run --output patch --repo ./project "Fix bugs" > fix.patch
 | `--disable-workers, -d` | Comma-separated workers to disable |
 | `--output, -o` | Output format: `rich`, `json`, `patch` |
 | `--model, -m` | Override model for all agents |
+| `--permission-mode` | Override permission mode: `default`, `acceptEdits`, `plan`, `bypassPermissions` |
 | `--store, -s` | Evidence store: `file` or `sqlite` |
+| `--apply-patch` | Apply generated patch to repo via `git apply` (explicit opt-in) |
 | `--streaming/--no-streaming` | Toggle live progress display |
 
 ## Programmatic Usage
@@ -137,14 +144,46 @@ Set via environment variables (prefix `PA_`), `.env` file, or programmatically:
 ```bash
 export PA_PLANNER_MODEL=opus
 export PA_JUDGE_MODEL=opus
+export PA_PERMISSION_MODE=default
+export PA_PARSE_RETRY_ATTEMPTS=1
 export PA_MAX_PARALLEL_WORKERS=4
 export PA_STORE_BACKEND=sqlite
 ```
+
+`PA_PERMISSION_MODE` supports `default`, `acceptEdits`, `plan`, and `bypassPermissions`.
+
+## Current Strengths
+
+- Parallel specialist analysis with a single merged result.
+- CLI, MCP server, PyPI package, npm wrapper, and release workflows.
+- Evidence storage for run history (`file` or `sqlite`).
+
+## Current Limitations
+
+- Generated patches should be reviewed before applying.
+- GitHub issue mode requires `gh` installation and authentication.
+- Output quality still depends on model behavior and repository context quality.
+
+## Release Docs
+
+- [CHANGELOG.md](CHANGELOG.md)
+- [COMPATIBILITY.md](COMPATIBILITY.md)
+
+## Exit Codes
+
+- `0`: success
+- `1`: runtime failure
+- `2`: authentication/API key failure
+- `3`: parse failure in planner/judge/worker structured output
+- `4`: worker execution failure (`status=error`)
+- `5`: no patch available when patch output/apply is requested
+- `6`: patch apply/check failure
 
 ## Requirements
 
 - Python 3.11+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- [GitHub CLI](https://cli.github.com/) installed and authenticated for GitHub issue URL mode
 - An Anthropic API key (via Claude Code authentication)
 
 ## License

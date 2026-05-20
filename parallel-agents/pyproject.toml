@@ -42,6 +42,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
+    "ruff>=0.8.0",
     "pyinstaller>=6.0.0",
     "mcp>=1.20.0",
 ]
@@ -59,9 +60,10 @@ parallel-agents-mcp = "parallel_agents.mcp_server:run_server"
 packages = ["src/parallel_agents"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/parallel_agents", "README.md", "LICENSE", "pyproject.toml"]
+include = ["src/parallel_agents", "README.md", "CHANGELOG.md", "COMPATIBILITY.md", "LICENSE", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["src"]

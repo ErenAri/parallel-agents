@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,7 +14,6 @@ from parallel_agents.mcp_tools import (
 )
 from parallel_agents.models import (
     Finding,
-    FinalOutput,
     Recommendation,
     Severity,
     WorkerResult,
@@ -259,7 +257,7 @@ async def test_analyze_single_worker_uses_direct_path():
     with patch(
         "parallel_agents.mcp_server.run_single_worker",
         new=AsyncMock(return_value=mock_result),
-    ) as mock_rsw:
+    ):
         from parallel_agents.mcp_server import analyze
 
         result = json.loads(await analyze("test", "security", "/repo"))

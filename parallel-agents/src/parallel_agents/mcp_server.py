@@ -20,16 +20,13 @@ Tools exposed:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from parallel_agents.config import PipelineConfig
 from parallel_agents.mcp_tools import (
-    format_worker_result,
     run_single_worker,
     truncate_output,
 )

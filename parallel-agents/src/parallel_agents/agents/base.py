@@ -54,7 +54,7 @@ class BaseWorker(ABC):
             system_prompt=self.system_prompt(subtask, plan),
             model=self.config.model,
             max_turns=self.config.max_turns,
-            permission_mode="bypassPermissions",
+            permission_mode=plan.global_context.get("permission_mode", "default"),
             cwd=plan.global_context.get("repo_path"),
         )
 
@@ -63,23 +63,45 @@ class BaseWorker(ABC):
         options = self.get_options(subtask, plan)
         prompt = self.build_user_prompt(subtask, plan)
 
+        parse_retry_attempts = _parse_retry_attempts_from_plan(plan)
+        max_attempts = max(1, parse_retry_attempts + 1)
+        parse_retries_used = 0
         raw_text = ""
+        findings: list[Finding] = []
+        recommendations: list[Recommendation] = []
+        parsed_structured = False
         total_cost = 0.0
         token_usage: dict[str, int] = {}
 
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        raw_text += block.text
-            elif isinstance(message, ResultMessage):
-                total_cost = message.total_cost_usd or 0.0
-                if message.usage:
-                    token_usage = message.usage
+        for attempt in range(max_attempts):
+            attempt_prompt = (
+                prompt if attempt == 0 else _build_parse_retry_prompt(prompt, raw_text)
+            )
+            raw_text, attempt_cost, attempt_usage = await _run_query_once(
+                attempt_prompt, options
+            )
+            total_cost += attempt_cost
+            _merge_token_usage(token_usage, attempt_usage)
+            findings, recommendations, parsed_structured = _extract_structured_output_with_meta(
+                raw_text
+            )
+            if parsed_structured:
+                parse_retries_used = attempt
+                break
+            parse_retries_used = attempt + 1
 
         completed_at = datetime.now(timezone.utc)
         return self._parse_result(
-            raw_text, subtask, started_at, completed_at, token_usage
+            raw_text,
+            subtask,
+            started_at,
+            completed_at,
+            token_usage,
+            total_cost,
+            findings=findings,
+            recommendations=recommendations,
+            parsed_structured=parsed_structured,
+            parse_retries_used=parse_retries_used,
         )
 
     async def execute_with_retry(
@@ -140,8 +162,16 @@ class BaseWorker(ABC):
         started_at: datetime,
         completed_at: datetime,
         token_usage: dict[str, Any],
+        cost_usd: float,
+        findings: list[Finding] | None = None,
+        recommendations: list[Recommendation] | None = None,
+        parsed_structured: bool | None = None,
+        parse_retries_used: int = 0,
     ) -> WorkerResult:
-        findings, recommendations = _extract_structured_output(raw_output)
+        if findings is None or recommendations is None or parsed_structured is None:
+            findings, recommendations, parsed_structured = _extract_structured_output_with_meta(
+                raw_output
+            )
 
         return WorkerResult(
             worker_name=self.name,
@@ -152,13 +182,27 @@ class BaseWorker(ABC):
             raw_output=raw_output,
             started_at=started_at,
             completed_at=completed_at,
-            token_usage=token_usage if token_usage else None,
+            token_usage={
+                **token_usage,
+                "parse_retries_used": parse_retries_used,
+                "parsed_structured_output": int(parsed_structured),
+            }
+            if token_usage or parse_retries_used or parsed_structured is not None
+            else None,
+            cost_usd=cost_usd,
         )
 
 
 def _extract_structured_output(
     raw_output: str,
 ) -> tuple[list[Finding], list[Recommendation]]:
+    findings, recommendations, _ = _extract_structured_output_with_meta(raw_output)
+    return findings, recommendations
+
+
+def _extract_structured_output_with_meta(
+    raw_output: str,
+) -> tuple[list[Finding], list[Recommendation], bool]:
     """Extract findings and recommendations from agent output.
 
     Tries multiple strategies for robustness:
@@ -174,20 +218,21 @@ def _extract_structured_output(
     if code_block:
         parsed = _try_parse_json(code_block.group(1))
         if parsed:
-            findings, recommendations = _extract_from_dict(parsed)
-            if findings or recommendations:
-                return findings, recommendations
+            findings, recommendations, has_schema = _extract_from_dict(parsed)
+            if has_schema:
+                return findings, recommendations, True
 
     # Strategy 2: outermost braces
     json_match = re.search(r"\{[\s\S]*\}", raw_output)
     if json_match:
         parsed = _try_parse_json(json_match.group())
         if parsed:
-            findings, recommendations = _extract_from_dict(parsed)
-            if findings or recommendations:
-                return findings, recommendations
+            findings, recommendations, has_schema = _extract_from_dict(parsed)
+            if has_schema:
+                return findings, recommendations, True
 
     # Strategy 3: find arrays directly
+    has_schema = False
     for pattern, target in [
         (r'"findings"\s*:\s*(\[[\s\S]*?\])', "findings"),
         (r'"recommendations"\s*:\s*(\[[\s\S]*?\])', "recommendations"),
@@ -200,10 +245,11 @@ def _extract_structured_output(
                     findings = _parse_findings(items)
                 else:
                     recommendations = _parse_recommendations(items)
+                has_schema = True
             except json.JSONDecodeError:
                 pass
 
-    return findings, recommendations
+    return findings, recommendations, has_schema
 
 
 def _try_parse_json(text: str) -> dict[str, Any] | None:
@@ -222,10 +268,11 @@ def _try_parse_json(text: str) -> dict[str, Any] | None:
 
 def _extract_from_dict(
     data: dict[str, Any],
-) -> tuple[list[Finding], list[Recommendation]]:
+) -> tuple[list[Finding], list[Recommendation], bool]:
+    has_schema = "findings" in data or "recommendations" in data
     findings = _parse_findings(data.get("findings", []))
     recommendations = _parse_recommendations(data.get("recommendations", []))
-    return findings, recommendations
+    return findings, recommendations, has_schema
 
 
 def _parse_findings(items: list[Any]) -> list[Finding]:
@@ -270,3 +317,46 @@ def _parse_recommendations(items: list[Any]) -> list[Recommendation]:
             except Exception:
                 pass
     return results
+
+
+async def _run_query_once(
+    prompt: str,
+    options: ClaudeCodeOptions,
+) -> tuple[str, float, dict[str, int]]:
+    raw_text = ""
+    total_cost = 0.0
+    token_usage: dict[str, int] = {}
+    async for message in query(prompt=prompt, options=options):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    raw_text += block.text
+        elif isinstance(message, ResultMessage):
+            total_cost = message.total_cost_usd or 0.0
+            if message.usage:
+                token_usage = message.usage
+    return raw_text, total_cost, token_usage
+
+
+def _merge_token_usage(total: dict[str, int], usage: dict[str, int]) -> None:
+    for key, value in usage.items():
+        total[key] = total.get(key, 0) + value
+
+
+def _parse_retry_attempts_from_plan(plan: TaskPlan) -> int:
+    raw_value = plan.global_context.get("parse_retry_attempts", 1)
+    try:
+        return max(0, int(raw_value))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _build_parse_retry_prompt(base_prompt: str, previous_output: str) -> str:
+    return (
+        f"{base_prompt}\n\n"
+        "Your previous response was not valid JSON for the required schema. "
+        "Return ONLY valid JSON with keys 'findings' and 'recommendations'. "
+        "Do not include markdown fences or extra text.\n\n"
+        "Previous response:\n"
+        f"{previous_output[:12000]}"
+    )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
 
 from claude_code_sdk import (
     AssistantMessage,
@@ -62,21 +61,31 @@ async def run_judge(
         system_prompt=JUDGE_SYSTEM_PROMPT,
         model=config.judge_model,
         max_turns=30,
-        permission_mode="bypassPermissions",
+        permission_mode=config.permission_mode,
         cwd=plan.global_context.get("repo_path"),
     )
 
-    raw_text = ""
+    max_attempts = max(1, config.parse_retry_attempts + 1)
     total_cost = 0.0
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    raw_text += block.text
-        elif isinstance(message, ResultMessage):
-            total_cost = message.total_cost_usd or 0.0
+    token_usage: dict[str, int] = {}
+    parse_retries_used = 0
+    raw_text = ""
+    output = FinalOutput(summary="Failed to parse judge output")
 
-    return _parse_judge_output(raw_text, worker_results, total_cost)
+    for attempt in range(max_attempts):
+        attempt_prompt = prompt if attempt == 0 else _build_retry_prompt(prompt, raw_text)
+        raw_text, attempt_cost, attempt_usage = await _run_query_once(attempt_prompt, options)
+        total_cost += attempt_cost
+        _merge_token_usage(token_usage, attempt_usage)
+
+        output = _parse_judge_output(raw_text, worker_results, total_cost, token_usage)
+        if not _is_parse_failure(output):
+            parse_retries_used = attempt
+            break
+        parse_retries_used = attempt + 1
+
+    output.metadata["parse_retries_used"] = parse_retries_used
+    return output
 
 
 def _build_judge_prompt(
@@ -110,13 +119,18 @@ def _parse_judge_output(
     raw_output: str,
     worker_results: dict[str, WorkerResult],
     total_cost: float,
+    token_usage: dict[str, int],
 ) -> FinalOutput:
     json_match = re.search(r"\{[\s\S]*\}", raw_output)
     if not json_match:
         return FinalOutput(
             summary="Failed to parse judge output",
             worker_results=worker_results,
-            metadata={"raw_judge_output": raw_output, "total_cost_usd": total_cost},
+            metadata={
+                "raw_judge_output": raw_output,
+                "total_cost_usd": total_cost,
+                "token_usage": token_usage,
+            },
         )
 
     try:
@@ -135,11 +149,56 @@ def _parse_judge_output(
             pr_summary=data.get("pr_summary", ""),
             worker_results=worker_results,
             conflicts_resolved=data.get("conflicts_resolved", []),
-            metadata={"total_cost_usd": total_cost},
+            metadata={"total_cost_usd": total_cost, "token_usage": token_usage},
         )
     except (json.JSONDecodeError, Exception) as e:
         return FinalOutput(
             summary=f"Judge output parse error: {e}",
             worker_results=worker_results,
-            metadata={"raw_judge_output": raw_output, "total_cost_usd": total_cost},
+            metadata={
+                "raw_judge_output": raw_output,
+                "total_cost_usd": total_cost,
+                "token_usage": token_usage,
+            },
         )
+
+
+async def _run_query_once(
+    prompt: str,
+    options: ClaudeCodeOptions,
+) -> tuple[str, float, dict[str, int]]:
+    raw_text = ""
+    total_cost = 0.0
+    token_usage: dict[str, int] = {}
+    async for message in query(prompt=prompt, options=options):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    raw_text += block.text
+        elif isinstance(message, ResultMessage):
+            total_cost = message.total_cost_usd or 0.0
+            if message.usage:
+                token_usage = message.usage
+    return raw_text, total_cost, token_usage
+
+
+def _merge_token_usage(total: dict[str, int], usage: dict[str, int]) -> None:
+    for key, value in usage.items():
+        total[key] = total.get(key, 0) + value
+
+
+def _is_parse_failure(output: FinalOutput) -> bool:
+    return output.summary == "Failed to parse judge output" or output.summary.startswith(
+        "Judge output parse error:"
+    )
+
+
+def _build_retry_prompt(base_prompt: str, previous_output: str) -> str:
+    return (
+        f"{base_prompt}\n\n"
+        "Your previous response was not valid JSON for the required schema. "
+        "Return ONLY valid JSON with keys: summary, risk_report, patch, pr_summary, conflicts_resolved. "
+        "Do not include markdown fences or extra text.\n\n"
+        "Previous response:\n"
+        f"{previous_output[:12000]}"
+    )
