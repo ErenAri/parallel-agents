@@ -7,6 +7,7 @@ import json
 from parallel_agents.models import (
     Finding,
     FinalOutput,
+    GitHubIssueContext,
     InputType,
     Priority,
     Recommendation,
@@ -33,9 +34,15 @@ class TestTaskInput:
             raw_input="https://github.com/org/repo/issues/42",
             input_type=InputType.GITHUB_ISSUE,
             github_url="https://github.com/org/repo/issues/42",
+            github_issue=GitHubIssueContext(
+                number=42,
+                title="Bug report",
+                body="Please fix this",
+            ),
         )
         assert ti.input_type == InputType.GITHUB_ISSUE
         assert ti.github_url is not None
+        assert ti.github_issue is not None
 
     def test_serialization_roundtrip(self):
         ti = TaskInput(raw_input="test", input_type=InputType.REPO_PATH, repo_path="/tmp/repo")
@@ -114,6 +121,7 @@ class TestWorkerResult:
         assert r.status == "success"
         assert r.findings == []
         assert r.recommendations == []
+        assert r.cost_usd == 0.0
 
     def test_json_roundtrip(self):
         r = WorkerResult(

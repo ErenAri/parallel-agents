@@ -1,5 +1,6 @@
 from parallel_agents.models import (
     TaskInput,
+    GitHubIssueContext,
     TaskPlan,
     WorkerResult,
     Finding,
@@ -18,6 +19,7 @@ from parallel_agents.evidence_store import (
 
 __all__ = [
     "TaskInput",
+    "GitHubIssueContext",
     "TaskPlan",
     "WorkerResult",
     "Finding",

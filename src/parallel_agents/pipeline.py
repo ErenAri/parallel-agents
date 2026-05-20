@@ -6,7 +6,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from parallel_agents.agents.judge import run_judge
 from parallel_agents.agents.planner import run_planner
@@ -16,6 +16,7 @@ from parallel_agents.cost_tracker import PipelineCostTracker
 from parallel_agents.evidence_store import BaseEvidenceStore, create_evidence_store
 from parallel_agents.models import (
     FinalOutput,
+    GitHubIssueContext,
     InputType,
     RunManifest,
     Subtask,
@@ -24,6 +25,8 @@ from parallel_agents.models import (
     TaskStatus,
     WorkerResult,
 )
+from parallel_agents.patch_tools import validate_unified_diff
+from parallel_agents.tools.github_tools import fetch_issue
 
 logger = logging.getLogger("parallel_agents.pipeline")
 
@@ -97,12 +100,45 @@ class Pipeline:
             if on_status:
                 on_status(msg)
 
+        if task_input.github_url:
+            _update_status("Resolving GitHub issue context...")
+            issue = await fetch_issue(task_input.github_url)
+            if not issue:
+                error_summary = (
+                    "Failed to fetch GitHub issue details. "
+                    "Install and authenticate GitHub CLI (`gh auth login`), then try again."
+                )
+                manifest.status = TaskStatus.FAILED
+                store.save_manifest(manifest)
+                return FinalOutput(
+                    summary=error_summary,
+                    metadata={
+                        "run_id": run_id,
+                        "github_url": task_input.github_url,
+                        "error": "github_issue_fetch_failed",
+                    },
+                )
+
+            task_input.github_issue = GitHubIssueContext(
+                number=issue.number,
+                title=issue.title,
+                body=issue.body,
+                labels=issue.labels,
+                state=issue.state,
+                url=issue.url,
+                comments=issue.comments,
+            )
+            manifest.input = task_input
+            store.save_manifest(manifest)
+            _update_status(f"Loaded issue #{issue.number}: {issue.title}")
+
         # Phase 1: Planning
         _update_status("Planning: analyzing repository and creating task plan...")
         manifest.phases["planning"] = {"status": "running", "started_at": _now_iso()}
         store.append_trace("pipeline", {"phase": "planning", "status": "started", "ts": _now_iso()})
-
+        planning_started = datetime.now(timezone.utc)
         plan = await run_planner(task_input, self.config)
+        planning_completed = datetime.now(timezone.utc)
         store.save_plan(plan)
         manifest.phases["planning"]["status"] = "completed"
         manifest.phases["planning"]["completed_at"] = _now_iso()
@@ -110,6 +146,14 @@ class Pipeline:
             "phase": "planning", "status": "completed", "ts": _now_iso(),
             "subtask_count": len(plan.subtasks),
         })
+        planner_metrics = plan.global_context.get("planner_metrics", {})
+        self.cost_tracker.record_usage(
+            agent_name="planner",
+            model=self.config.planner_model,
+            usage=planner_metrics.get("token_usage"),
+            cost_usd=float(planner_metrics.get("total_cost_usd", 0.0) or 0.0),
+            duration_ms=int((planning_completed - planning_started).total_seconds() * 1000),
+        )
 
         if not plan.subtasks:
             _update_status("Planner produced no subtasks. Returning empty result.")
@@ -161,7 +205,7 @@ class Pipeline:
                     agent_name=result.worker_name,
                     model=model,
                     usage=result.token_usage,
-                    cost_usd=0.0,
+                    cost_usd=result.cost_usd,
                     duration_ms=int(
                         (result.completed_at - result.started_at).total_seconds() * 1000
                     ),
@@ -188,8 +232,10 @@ class Pipeline:
         _update_status("Judge is merging results and producing final output...")
         manifest.phases["judging"] = {"status": "running", "started_at": _now_iso()}
         store.append_trace("pipeline", {"phase": "judging", "status": "started", "ts": _now_iso()})
-
+        judging_started = datetime.now(timezone.utc)
         final_output = await run_judge(plan, all_results, self.config)
+        _validate_and_normalize_patch(final_output)
+        judging_completed = datetime.now(timezone.utc)
         store.save_final_output(final_output)
         manifest.phases["judging"]["status"] = "completed"
         manifest.phases["judging"]["completed_at"] = _now_iso()
@@ -198,6 +244,13 @@ class Pipeline:
             "risk_items": len(final_output.risk_report),
             "has_patch": final_output.patch is not None,
         })
+        self.cost_tracker.record_usage(
+            agent_name="judge",
+            model=self.config.judge_model,
+            usage=final_output.metadata.get("token_usage"),
+            cost_usd=float(final_output.metadata.get("total_cost_usd", 0.0) or 0.0),
+            duration_ms=int((judging_completed - judging_started).total_seconds() * 1000),
+        )
 
         # Finalize cost tracking
         cost_summary = self.cost_tracker.summary()
@@ -289,3 +342,24 @@ class Pipeline:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _validate_and_normalize_patch(final_output: FinalOutput) -> None:
+    """Validate judge patch before exposing it to CLI/MCP output."""
+    if not final_output.patch:
+        final_output.metadata["patch_validation"] = {
+            "valid": False,
+            "reason": "No patch generated.",
+        }
+        return
+
+    valid, reason = validate_unified_diff(final_output.patch)
+    final_output.metadata["patch_validation"] = {"valid": valid, "reason": reason}
+    if not valid:
+        final_output.metadata["invalid_patch"] = final_output.patch
+        final_output.patch = None
+        if "patch validation failed" not in final_output.summary.lower():
+            final_output.summary = (
+                f"{final_output.summary}\n\n"
+                f"Note: patch validation failed and patch output was suppressed ({reason})."
+            )

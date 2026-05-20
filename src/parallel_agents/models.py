@@ -41,11 +41,22 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 
+class GitHubIssueContext(BaseModel):
+    number: int
+    title: str
+    body: str
+    labels: list[str] = Field(default_factory=list)
+    state: str = ""
+    url: str = ""
+    comments: list[dict[str, str]] = Field(default_factory=list)
+
+
 class TaskInput(BaseModel):
     raw_input: str
     input_type: InputType
     repo_path: str | None = None
     github_url: str | None = None
+    github_issue: GitHubIssueContext | None = None
 
 
 class Subtask(BaseModel):
@@ -93,6 +104,7 @@ class WorkerResult(BaseModel):
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     token_usage: dict[str, int] | None = None
+    cost_usd: float = 0.0
 
 
 class FinalOutput(BaseModel):

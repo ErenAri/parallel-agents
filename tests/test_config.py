@@ -26,7 +26,9 @@ class TestPipelineConfig:
         assert config.judge_model == "opus"
         assert config.max_parallel_workers == 4
         assert config.max_retries == 2
+        assert config.parse_retry_attempts == 1
         assert config.store_backend == "file"
+        assert config.permission_mode == "default"
         assert len(config.workers) == 8
 
     def test_all_workers_present(self):

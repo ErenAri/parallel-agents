@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from parallel_agents.agents.base import _extract_structured_output
+from parallel_agents.agents.base import (
+    _extract_structured_output,
+    _extract_structured_output_with_meta,
+)
 
 
 class TestExtractStructuredOutput:
@@ -68,8 +71,20 @@ Please review these findings carefully."""
         assert findings == []
         assert recs == []
 
+    def test_meta_marks_empty_arrays_as_structured(self):
+        output = '{"findings": [], "recommendations": []}'
+        findings, recs, has_schema = _extract_structured_output_with_meta(output)
+        assert findings == []
+        assert recs == []
+        assert has_schema is True
+
     def test_invalid_finding_skipped(self):
         output = '{"findings": [{"invalid": true}, {"severity": "high", "category": "sec", "title": "real", "description": "real finding"}], "recommendations": []}'
         findings, recs = _extract_structured_output(output)
         # Invalid one is skipped or parsed with fallback, valid one is kept
         assert any(f.title == "real" for f in findings)
+
+    def test_meta_marks_non_schema_json_as_unstructured(self):
+        output = '{"message": "hello"}'
+        _, _, has_schema = _extract_structured_output_with_meta(output)
+        assert has_schema is False

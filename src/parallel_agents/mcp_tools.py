@@ -8,16 +8,11 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from typing import Any
 
 from parallel_agents.config import PipelineConfig, WorkerConfig
-from parallel_agents.evidence_store import create_evidence_store
 from parallel_agents.models import (
-    FinalOutput,
-    InputType,
     Subtask,
-    TaskInput,
     TaskPlan,
     WorkerResult,
 )
@@ -67,7 +62,11 @@ async def run_single_worker(
         summary=task,
         repo_analysis={"path": resolved_repo},
         subtasks=[subtask],
-        global_context={"repo_path": resolved_repo},
+        global_context={
+            "repo_path": resolved_repo,
+            "permission_mode": config.permission_mode,
+            "parse_retry_attempts": config.parse_retry_attempts,
+        },
     )
 
     # Get worker config
@@ -75,17 +74,13 @@ async def run_single_worker(
     worker_cls = WORKER_REGISTRY[worker_name]
     worker = worker_cls(worker_config)
 
-    # Create a temporary evidence store for this MCP call
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        store = create_evidence_store(tmp_dir, f"mcp-{worker_name}", "file")
-
-        result = await worker.execute_with_retry(
-            subtask,
-            plan,
-            max_retries=config.max_retries,
-            retry_delay=config.retry_delay_seconds,
-            timeout=worker_config.timeout_seconds,
-        )
+    result = await worker.execute_with_retry(
+        subtask,
+        plan,
+        max_retries=config.max_retries,
+        retry_delay=config.retry_delay_seconds,
+        timeout=worker_config.timeout_seconds,
+    )
 
     return format_worker_result(result)
 
