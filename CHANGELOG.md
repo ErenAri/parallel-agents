@@ -6,6 +6,35 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-21
+
+### Added
+- Company workflow completion:
+  - `SprintPlan` and `PostReleaseReview` models
+  - `parallel-agents company sprint`
+  - `parallel-agents company post-release`
+  - `parallel-agents company templates`
+  - `parallel-agents company branch-name`
+  - `parallel-agents company pr-summary`
+- Approval-gated GitHub issue apply flow with immutable approval audit entries.
+- Apply-time policy checks for repository, label, and milestone allowlists/patterns.
+- MCP parity tools for company plan, approve, apply, artifacts, templates, and evaluation scoring.
+- Optional local gateway/job API:
+  - `parallel-agents gateway start`
+  - local SQLite project/run/job/event store
+  - local company workflow endpoints
+- `PROJECT_STATUS.md` checkpoint document.
+- Evaluation harness for productivity/effectiveness benchmarking:
+  - `parallel-agents eval run` to execute a fixed dataset
+  - `parallel-agents eval score` to compute scorecard metrics and delivery impact
+- New `src/parallel_agents/eval_harness.py` module with dataset/results models, scoring, and markdown report rendering.
+- Example benchmark dataset at `examples/eval_dataset.json`.
+
+### Changed
+- README updated with company workflow, evaluation, and gateway usage.
+- Roadmap updated to reflect completed, partial, and not-started phases.
+- Added robust Claude CLI fallback path in planner/worker/judge query execution when SDK stream parsing fails.
+
 ## [0.4.1] - 2026-05-21
 
 ### Changed

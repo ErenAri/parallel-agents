@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-05-21T13:58:55.427814Z",
+  "case_count": 1,
+  "completed_count": 1,
+  "failed_count": 0,
+  "speed_gain_median": 0.9928976293333333,
+  "speed_gain_mean": 0.9928976293333333,
+  "speed_gain_ci_low": null,
+  "speed_gain_ci_high": null,
+  "speed_sample_size": 1,
+  "acceptance_rate": null,
+  "acceptance_gain": null,
+  "acceptance_sample_size": 0,
+  "regression_rate": null,
+  "regression_increase": null,
+  "regression_sample_size": 0,
+  "finding_precision": null,
+  "finding_precision_sample_size": 0,
+  "weighted_delivery_impact_score": null
+}

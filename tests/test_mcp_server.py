@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -263,6 +264,130 @@ async def test_analyze_single_worker_uses_direct_path():
         result = json.loads(await analyze("test", "security", "/repo"))
 
     assert result["worker_name"] == "security"
+
+
+# ---------------------------------------------------------------------------
+# Company workflow MCP tools
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_company_idea_tool():
+    from parallel_agents.mcp_server import company_idea
+
+    payload = json.loads(await company_idea("Build a no-code roadmap generator"))
+    assert payload["title"] == "Build A No-Code Roadmap Generator"
+    assert payload["goals"]
+
+
+@pytest.mark.asyncio
+async def test_company_roadmap_invalid_horizon():
+    from parallel_agents.mcp_server import company_roadmap
+
+    payload = json.loads(await company_roadmap("Build planning automation", horizon_weeks=0))
+    assert payload["error"] is True
+    assert "horizon_weeks" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_company_release_check_tool(tmp_path):
+    from parallel_agents.mcp_server import company_release_check
+
+    (tmp_path / "README.md").write_text("# demo\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text("# changes\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_demo.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    payload = json.loads(await company_release_check(repo_path=str(tmp_path)))
+    assert payload["status"] in {"ready", "needs_attention"}
+    assert payload["items"]
+
+
+@pytest.mark.asyncio
+async def test_company_plan_approve_artifacts_and_templates_tools(tmp_path):
+    from parallel_agents.company_workflows import build_roadmap, create_product_brief
+    from parallel_agents.mcp_server import (
+        company_approve,
+        company_artifacts,
+        company_plan,
+        company_templates,
+    )
+
+    roadmap = build_roadmap(create_product_brief("Build MCP parity")).model_dump(mode="json")
+    plan_payload = json.loads(
+        await company_plan(
+            roadmap_json=json.dumps(roadmap),
+            repo="owner/repo",
+            run_id="run-mcp-plan",
+            output_dir=str(tmp_path),
+        )
+    )
+    assert plan_payload["approval_status"] == "pending"
+
+    approval_payload = json.loads(
+        await company_approve(
+            run_id="run-mcp-plan",
+            approver="lead",
+            approval_note="approved",
+            output_dir=str(tmp_path),
+        )
+    )
+    assert approval_payload["approved"] is True
+    assert approval_payload["approval_note"] == "approved"
+
+    artifacts_payload = json.loads(await company_artifacts("run-mcp-plan", output_dir=str(tmp_path)))
+    assert "issue-plan" in artifacts_payload["artifacts"]
+
+    templates_payload = json.loads(await company_templates(json.dumps(roadmap)))
+    assert templates_payload["labels"]
+    assert templates_payload["milestones"]
+
+
+@pytest.mark.asyncio
+async def test_company_apply_tool_requires_approval(tmp_path):
+    from parallel_agents.company_workflows import build_roadmap, create_product_brief
+    from parallel_agents.mcp_server import company_apply, company_plan
+
+    roadmap = build_roadmap(create_product_brief("Build MCP approval")).model_dump(mode="json")
+    await company_plan(
+        roadmap_json=json.dumps(roadmap),
+        repo="owner/repo",
+        run_id="run-mcp-unapproved",
+        output_dir=str(tmp_path),
+    )
+
+    payload = json.loads(await company_apply("run-mcp-unapproved", output_dir=str(tmp_path)))
+    assert payload["error"] is True
+    assert "not approved" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_eval_score_tool(tmp_path):
+    from parallel_agents.eval_harness import EvaluationResults, EvaluationRunRecord
+    from parallel_agents.mcp_server import eval_score
+
+    results_path = tmp_path / "results.json"
+    results = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(results_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="c1",
+                task="task",
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+                duration_seconds=1.0,
+                status="success",
+                summary="ok",
+            )
+        ],
+    )
+    results_path.write_text(results.model_dump_json(indent=2), encoding="utf-8")
+
+    payload = json.loads(await eval_score(str(results_path)))
+    assert payload["case_count"] == 1
 
 
 # ---------------------------------------------------------------------------

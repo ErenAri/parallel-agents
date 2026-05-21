@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import logging
 
 from claude_code_sdk import (
     AssistantMessage,
@@ -12,6 +13,7 @@ from claude_code_sdk import (
 )
 
 from parallel_agents.config import PipelineConfig
+from parallel_agents.claude_cli_fallback import run_query_via_cli
 from parallel_agents.models import (
     Finding,
     FinalOutput,
@@ -48,6 +50,8 @@ Output a JSON object with this structure:
 
 Be thorough but practical. If workers disagree, favor security over convenience.
 """
+
+logger = logging.getLogger("parallel_agents.judge")
 
 
 async def run_judge(
@@ -170,16 +174,28 @@ async def _run_query_once(
     raw_text = ""
     total_cost = 0.0
     token_usage: dict[str, int] = {}
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    raw_text += block.text
-        elif isinstance(message, ResultMessage):
-            total_cost = message.total_cost_usd or 0.0
-            if message.usage:
-                token_usage = message.usage
-    return raw_text, total_cost, token_usage
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        raw_text += block.text
+            elif isinstance(message, ResultMessage):
+                total_cost = message.total_cost_usd or 0.0
+                if message.usage:
+                    token_usage = message.usage
+        return raw_text, total_cost, token_usage
+    except Exception as exc:
+        logger.warning(
+            "Judge SDK query failed (%s). Falling back to direct Claude CLI.",
+            exc,
+        )
+        fallback_text, fallback_cost, fallback_usage = await run_query_via_cli(prompt, options)
+        if fallback_usage:
+            fallback_usage["fallback_cli_used"] = 1
+        else:
+            fallback_usage = {"fallback_cli_used": 1}
+        return fallback_text, fallback_cost, fallback_usage
 
 
 def _merge_token_usage(total: dict[str, int], usage: dict[str, int]) -> None:

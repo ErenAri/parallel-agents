@@ -19,6 +19,8 @@ npx parallel-agents run --repo ./my-project "Fix security issues"
 npm install -g parallel-agents
 parallel-agents run --repo ./project "Review code quality"
 parallel-agents workers
+parallel-agents company idea "Build a no-code repo reviewer" --json-output
+parallel-agents gateway start --host 127.0.0.1 --port 8733
 ```
 
 ## How it works

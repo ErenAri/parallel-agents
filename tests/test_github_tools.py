@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from parallel_agents.tools.github_tools import GitHubIssue, fetch_issue, parse_github_url
+from parallel_agents.tools.github_tools import (
+    GitHubIssue,
+    create_issue,
+    ensure_milestone,
+    fetch_issue,
+    parse_github_url,
+    parse_repo_ref,
+)
 
 
 class TestParseGitHubUrl:
@@ -34,6 +41,17 @@ class TestParseGitHubUrl:
     def test_no_issue_number(self):
         result = parse_github_url("https://github.com/owner/repo/issues/")
         assert result is None
+
+
+class TestParseRepoRef:
+    def test_slug(self):
+        assert parse_repo_ref("owner/repo") == ("owner", "repo")
+
+    def test_url(self):
+        assert parse_repo_ref("https://github.com/owner/repo") == ("owner", "repo")
+
+    def test_invalid(self):
+        assert parse_repo_ref("gitlab.com/owner/repo") is None
 
 
 class TestFetchIssue:
@@ -72,3 +90,49 @@ class TestFetchIssue:
         with patch("parallel_agents.tools.github_tools._gh_available", return_value=False):
             issue = await fetch_issue("https://github.com/owner/repo/issues/42")
         assert issue is None
+
+
+class TestMilestonesAndIssues:
+    @pytest.mark.asyncio
+    async def test_ensure_milestone_uses_existing(self):
+        payload = [{"title": "M1", "number": 1, "state": "open", "html_url": "u"}]
+        with patch("parallel_agents.tools.github_tools._gh_available", return_value=True):
+            with patch(
+                "parallel_agents.tools.github_tools._run_gh",
+                new=AsyncMock(return_value=(json.dumps(payload), 0)),
+            ):
+                milestone = await ensure_milestone("owner", "repo", "M1")
+        assert milestone is not None
+        assert milestone.title == "M1"
+        assert milestone.number == 1
+
+    @pytest.mark.asyncio
+    async def test_ensure_milestone_creates_when_missing(self):
+        list_payload = []
+        create_payload = {"title": "M2", "number": 2, "state": "open", "html_url": "x"}
+        with patch("parallel_agents.tools.github_tools._gh_available", return_value=True):
+            with patch(
+                "parallel_agents.tools.github_tools._run_gh",
+                new=AsyncMock(side_effect=[(json.dumps(list_payload), 0), (json.dumps(create_payload), 0)]),
+            ):
+                milestone = await ensure_milestone("owner", "repo", "M2")
+        assert milestone is not None
+        assert milestone.title == "M2"
+        assert milestone.number == 2
+
+    @pytest.mark.asyncio
+    async def test_create_issue_happy_path(self):
+        with patch("parallel_agents.tools.github_tools._gh_available", return_value=True):
+            with patch(
+                "parallel_agents.tools.github_tools._run_gh",
+                new=AsyncMock(return_value=("https://github.com/owner/repo/issues/99\n", 0)),
+            ):
+                url = await create_issue(
+                    "owner",
+                    "repo",
+                    "Issue title",
+                    "Issue body",
+                    milestone="M1",
+                    labels=["planning", "ai"],
+                )
+        assert url == "https://github.com/owner/repo/issues/99"
