@@ -10,7 +10,7 @@ from click.testing import CliRunner
 import parallel_agents.main as main_module
 import parallel_agents.mcp_installer as mcp_installer_module
 import parallel_agents.eval_harness as eval_harness_module
-from parallel_agents.company_artifacts import load_company_artifact_events
+from parallel_agents.company_artifacts import load_company_artifact_events, persist_company_artifact
 from parallel_agents.eval_harness import (
     EvaluationAnnotations,
     EvaluationResults,
@@ -1142,3 +1142,106 @@ def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
     assert captured["port"] == 8733
     assert captured["output_dir"] == str(tmp_path)
     assert captured["api_key"] == "secret-token"
+
+
+def test_office_init_creates_project_workspace(tmp_path):
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["office", "init", "--project", str(tmp_path), "--name", "Demo Office", "--json-output"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["name"] == "Demo Office"
+    assert (tmp_path / ".parallel-agents" / "project.json").exists()
+    assert (tmp_path / ".parallel-agents" / "runs").is_dir()
+    assert (tmp_path / ".parallel-agents" / "artifacts").is_dir()
+
+
+def test_office_status_reports_initialized_workspace(tmp_path):
+    runner = _runner()
+    init_result = runner.invoke(
+        main_module.cli,
+        ["office", "init", "--project", str(tmp_path), "--name", "Status Demo"],
+    )
+    assert init_result.exit_code == 0
+
+    status_result = runner.invoke(
+        main_module.cli,
+        ["office", "status", "--project", str(tmp_path), "--json-output"],
+    )
+
+    assert status_result.exit_code == 0
+    payload = json.loads(status_result.output)
+    assert payload["initialized"] is True
+    assert payload["project"]["name"] == "Status Demo"
+    assert payload["directory_exists"]["runs"] is True
+
+
+def test_office_home_and_artifacts_use_project_workspace(tmp_path):
+    runner = _runner()
+    init_result = runner.invoke(
+        main_module.cli,
+        ["office", "init", "--project", str(tmp_path), "--name", "Artifacts Demo"],
+    )
+    assert init_result.exit_code == 0
+
+    office_output = tmp_path / ".parallel-agents"
+    persist_company_artifact(
+        office_output,
+        "run-xyz",
+        "roadmap",
+        {"name": "Roadmap A", "items": []},
+    )
+    persist_company_artifact(
+        office_output,
+        "run-xyz",
+        "issue-plan",
+        {"issues": []},
+    )
+
+    home_result = runner.invoke(
+        main_module.cli,
+        ["office", "home", "--project", str(tmp_path), "--json-output"],
+    )
+    assert home_result.exit_code == 0
+    home_payload = json.loads(home_result.output)
+    assert home_payload["run_count"] >= 1
+    assert home_payload["artifact_count"] >= 2
+    assert str(office_output) in home_payload["output_dir"]
+
+    runs_result = runner.invoke(
+        main_module.cli,
+        ["office", "artifacts", "--project", str(tmp_path), "--json-output"],
+    )
+    assert runs_result.exit_code == 0
+    runs_payload = json.loads(runs_result.output)
+    assert runs_payload["run_count"] >= 1
+    assert runs_payload["runs"][0]["run_id"] == "run-xyz"
+
+    run_result = runner.invoke(
+        main_module.cli,
+        ["office", "artifacts", "--project", str(tmp_path), "--run-id", "run-xyz", "--json-output"],
+    )
+    assert run_result.exit_code == 0
+    run_payload = json.loads(run_result.output)
+    assert run_payload["count"] >= 2
+    assert "roadmap" in run_payload["artifacts"]
+
+    one_artifact_result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "artifacts",
+            "--project",
+            str(tmp_path),
+            "--run-id",
+            "run-xyz",
+            "--artifact",
+            "roadmap",
+        ],
+    )
+    assert one_artifact_result.exit_code == 0
+    artifact_payload = json.loads(one_artifact_result.output)
+    assert artifact_payload["name"] == "Roadmap A"

@@ -363,7 +363,7 @@ def build_architecture_rfc(
         "Phase 1: Company workflow models and CLI commands",
         "Phase 2: GitHub-first issue and PR workflows",
         "Phase 3: Gateway/job system",
-        "Phase 4: No-code dashboard and hosted MCP surface",
+        "Phase 4: Local desktop office and hosted MCP surface",
     ]
     return ArchitectureRFC(
         id=rfc_id,

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document describes how to use the local gateway as a durable backend for no-code and agent-driven workflow surfaces.
+This document describes how to use the local gateway as an internal durable backend for project-office automation and agent-driven workflow surfaces.
 
 The gateway stores project/run/job/event state in SQLite at:
 
@@ -57,6 +57,7 @@ When API key protection is enabled, all endpoints except `GET /health` require o
 ### Health
 
 - `GET /health`
+- `GET /metrics/summary`
 
 ### Projects
 
@@ -79,6 +80,7 @@ When API key protection is enabled, all endpoints except `GET /health` require o
 - `POST /runs/{run_id}/cancel`
 - `POST /runs/{run_id}/retry`
 - `GET /runs/{run_id}/jobs`
+- `GET /runs/{run_id}/artifacts/{artifact_name}`
 - `GET /runs/{run_id}/artifacts`
 - `GET /runs/{run_id}/events`
 
@@ -89,7 +91,7 @@ Most run-creation endpoints accept:
 - `wait` (default `true`): return when run reaches a terminal status.
 - `wait_timeout_seconds` (default `30`): polling timeout for synchronous responses.
 
-For queue-style behavior from a UI or external orchestrator:
+For queue-style behavior from a desktop shell, CLI wrapper, or external orchestrator:
 
 - send `wait=false`
 - poll `GET /runs/{run_id}`

@@ -8,7 +8,7 @@ The near-term product path is:
 
 ```text
 Stabilize engine -> First-class company workflows -> GitHub approval workflow
-  -> Local gateway/job system -> No-code dashboard -> Hosted MCP
+  -> Local gateway/job system -> Local desktop office -> Hosted MCP
 ```
 
 ## Phase 0: Engine Stabilization
@@ -89,25 +89,29 @@ Completed:
 
 Remaining:
 
-- Gateway-backed UI integration.
+- Desktop/exe shell integration.
 - Hosted-grade auth for multi-tenant remote deployments (OAuth/JWT/session model).
 
-## Phase 4: No-Code Web Dashboard
+## Phase 4: Local Desktop Office
 
-Status: not started.
+Status: started.
 
-Goal: public-facing workflow for non-coders.
+Goal: local `.exe` experience that works inside the selected project folder.
 
-Planned deliverables:
+Completed:
 
-- Connect GitHub.
-- Choose repository.
-- Start project from idea.
-- Review generated artifacts.
-- Approve implementation.
-- Watch agent runs.
-- Open PR.
-- View metrics.
+- Project-folder workspace layout under `.parallel-agents/`.
+- `parallel-agents office init` to create local workspace metadata and directories.
+- `parallel-agents office status` to inspect workspace health.
+- PyInstaller spec includes project-office module for standalone binary builds.
+
+Remaining:
+
+- Native/desktop shell around the local workspace.
+- Project picker rooted in local folders.
+- Local artifact browser and approval queue.
+- GitHub connection and PR creation from the desktop office.
+- Richer release and productivity views.
 
 ## Phase 5: Remote MCP Product Surface
 
@@ -141,10 +145,12 @@ Remaining:
 - Run comparison reports.
 - PR acceptance tracking.
 - Regression tracking from CI outcomes.
-- Cost and time dashboard.
+- Cost and time views.
 
 ## Near-Term Priority
 
-The next high-impact work is **Phase 4: No-Code Web Dashboard** backed by the current gateway APIs.
+The next high-impact work is to expand the local desktop office into a practical `.exe` product surface:
 
-The gateway now provides persistent runs, job state, artifacts, events, retry/cancel controls, and basic API-key protection, which is enough to start a practical UI without a backend rewrite.
+- project picker and local workspace home
+- artifact browser and approval queue
+- GitHub connection and PR flow integration

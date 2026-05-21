@@ -7,4 +7,5 @@
 # Project-local tool configs and caches
 /parallel-agents/.mcp.json
 /parallel-agents/.parallel-agents-output/
+/parallel-agents/.parallel-agents/
 /parallel-agents/.ruff_cache/

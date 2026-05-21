@@ -26,7 +26,7 @@ def persist_company_artifact(
     artifact_name: str,
     artifact_payload: BaseModel | dict[str, Any],
 ) -> Path:
-    """Persist a company artifact under .parallel-agents-output/<run_id>/company."""
+    """Persist a company artifact under <output_dir>/<run_id>/company."""
     if not run_id.strip():
         raise ValueError("run_id cannot be empty")
     if not artifact_name.strip():
