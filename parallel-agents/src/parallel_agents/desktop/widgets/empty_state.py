@@ -34,8 +34,8 @@ class EmptyState(QWidget):
         card = QWidget()
         card.setObjectName("EmptyStateCard")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(28, 24, 28, 24)
-        card_layout.setSpacing(8)
+        card_layout.setContentsMargins(24, 24, 24, 24)
+        card_layout.setSpacing(12)
         card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         glyph_label = QLabel(glyph)

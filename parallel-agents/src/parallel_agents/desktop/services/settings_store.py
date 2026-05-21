@@ -34,6 +34,24 @@ KNOWN_KEYS: tuple[str, ...] = (
     "PA_DESKTOP_BRIEF_MODEL",
 )
 
+# Known model choices. Aliases (opus/sonnet/haiku) resolve to the most capable
+# version of each tier; specific IDs are available for pinning.
+MODEL_CHOICES: tuple[str, ...] = (
+    "opus",
+    "sonnet",
+    "haiku",
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+)
+
+PERMISSION_MODE_CHOICES: tuple[str, ...] = (
+    "default",
+    "acceptEdits",
+    "plan",
+    "bypassPermissions",
+)
+
 
 @dataclass
 class LoadedSettings:

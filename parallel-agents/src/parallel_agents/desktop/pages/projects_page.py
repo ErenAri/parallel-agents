@@ -46,7 +46,7 @@ class ProjectsPage(Page):
         self.current_card = QFrame()
         self.current_card.setObjectName("Card")
         card_layout = QVBoxLayout(self.current_card)
-        card_layout.setContentsMargins(18, 16, 18, 16)
+        card_layout.setContentsMargins(20, 16, 20, 16)
         self.current_label = QLabel("No project selected.")
         self.current_label.setStyleSheet("font-size: 15px; font-weight: 600;")
         self.current_meta = QLabel("")

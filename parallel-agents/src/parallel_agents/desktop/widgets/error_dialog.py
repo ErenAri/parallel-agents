@@ -29,7 +29,7 @@ class ErrorDialog(QDialog):
         self._details = details or ""
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
         msg_label = QLabel(message)

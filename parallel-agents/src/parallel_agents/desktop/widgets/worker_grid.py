@@ -37,17 +37,19 @@ class WorkerTile(QFrame):
         self.role = role
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(4)
 
         self.name_label = QLabel(role.upper())
-        self.name_label.setStyleSheet("font-weight: 600; letter-spacing: 0.8px;")
+        self.name_label.setStyleSheet(
+            "font-weight: 600; letter-spacing: 0.8px; font-size: 11px; color: #c9cdd6;"
+        )
 
         self.status_label = QLabel("idle")
         self.status_label.setObjectName(STATUS_STYLE["idle"])
 
         self.detail_label = QLabel("Waiting for run")
-        self.detail_label.setStyleSheet("color: #8a90a2;")
+        self.detail_label.setStyleSheet("color: #8a90a2; font-size: 12px;")
         self.detail_label.setWordWrap(True)
 
         layout.addWidget(self.name_label)

@@ -76,7 +76,7 @@ def _install_pyside6_stub() -> None:
     ]}
     # QtWidgets
     qt_widgets = {n: _Stub for n in [
-        "QApplication", "QCheckBox", "QDialog", "QDialogButtonBox",
+        "QApplication", "QCheckBox", "QComboBox", "QDialog", "QDialogButtonBox",
         "QFileDialog", "QFormLayout", "QFrame", "QGridLayout",
         "QGroupBox", "QHBoxLayout", "QInputDialog", "QLabel", "QLineEdit",
         "QListWidget", "QListWidgetItem", "QMainWindow", "QMessageBox",

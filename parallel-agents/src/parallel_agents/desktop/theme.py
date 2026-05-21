@@ -1,188 +1,309 @@
+"""Design tokens + QSS for the Parallel Agents Office desktop app.
+
+Token philosophy (Linear / Vercel / Sentry-class dark UI):
+  - Restricted palette: monochrome greys + one accent. Status uses dots,
+    not full chip backgrounds.
+  - 4px spacing scale, no ad-hoc values.
+  - Type scale: 11 caps / 12 meta / 13 body / 15 title / 18 section / 24 page.
+  - Four elevation tiers from sidebar (0) up to modal (4).
+"""
+
 from __future__ import annotations
 
 from parallel_agents.desktop._qt import QApplication
 
-# Palette
-BG          = "#0f1115"
-BG_PANEL    = "#0a0c10"
-BG_CARD     = "#151823"
-BG_CARD_HI  = "#1a1e2d"
-BG_INPUT    = "#0c0f17"
-BORDER      = "#1f2434"
-BORDER_HI   = "#2a3149"
-TEXT        = "#e6e8ec"
-TEXT_DIM    = "#8a90a2"
-TEXT_FAINT  = "#6a7185"
-ACCENT      = "#5b8def"
-ACCENT_HI   = "#7aa3ff"
-SUCCESS     = "#4ad08b"
-WARNING     = "#f0b146"
-DANGER      = "#ff7a90"
+# ---------------------------------------------------------------------------
+# Tokens
+# ---------------------------------------------------------------------------
+
+# Spacing scale (multiples of 4)
+S1, S2, S3, S4, S5, S6, S7 = 4, 8, 12, 16, 20, 24, 32
+
+# Type scale
+FS_CAPS    = 11   # uppercase tracked labels
+FS_META    = 12   # dim secondary text
+FS_BODY    = 13   # body
+FS_TITLE   = 15   # card/section titles
+FS_SECTION = 18   # subsection headers
+FS_PAGE    = 24   # page header
+
+# Elevation surfaces — order: deepest to highest
+ELEV_0     = "#0a0c10"  # sidebar / status bar (sunk)
+ELEV_1     = "#0f1115"  # base canvas
+ELEV_2     = "#151823"  # cards
+ELEV_3     = "#1a1e2d"  # hovered card / nav active
+ELEV_4     = "#1f2434"  # input / modal surface
+
+# Borders — desaturated, near-neutral
+BORDER     = "#1f2434"
+BORDER_HI  = "#2a3149"
+
+# Text
+TEXT_HI    = "#f0f2f7"  # headings, key data
+TEXT       = "#c9cdd6"  # body
+TEXT_DIM   = "#8a90a2"  # secondary
+TEXT_FAINT = "#5d6478"  # tertiary / placeholder
+
+# Accent — exactly one
+ACCENT     = "#5b8def"
+ACCENT_HI  = "#7aa3ff"
+ACCENT_LO  = "#22315c"  # subdued tint for hover/selected backgrounds
+
+# Status dots only (text and pill backgrounds stay neutral; dot carries meaning)
+DOT_IDLE    = "#5d6478"
+DOT_RUNNING = "#d4a83a"
+DOT_DONE    = "#3aa873"
+DOT_ERROR   = "#d76377"
+
+
+# ---------------------------------------------------------------------------
+# QSS
+# ---------------------------------------------------------------------------
 
 QSS = f"""
-* {{ font-family: "Segoe UI", "Inter", system-ui, sans-serif; font-size: 13px; }}
+* {{
+    font-family: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    font-size: {FS_BODY}px;
+    color: {TEXT};
+}}
 
-QMainWindow, QWidget {{ background: {BG}; color: {TEXT}; }}
+QMainWindow, QWidget {{ background: {ELEV_1}; }}
 
+/* ---------------- Sidebar ---------------- */
 #Sidebar {{
-    background: {BG_PANEL};
+    background: {ELEV_0};
     border-right: 1px solid {BORDER};
     min-width: 220px;
-    max-width: 260px;
+    max-width: 240px;
 }}
 #SidebarHeader {{
     color: {TEXT_FAINT};
-    font-size: 11px;
+    font-size: {FS_CAPS}px;
     font-weight: 600;
-    letter-spacing: 1.2px;
-    padding: 18px 18px 8px 18px;
+    letter-spacing: 1.4px;
+    padding: {S5}px {S4}px {S2}px {S4}px;
     text-transform: uppercase;
 }}
 QPushButton#NavButton {{
     background: transparent;
-    color: #c9cdd6;
+    color: {TEXT};
     border: none;
     text-align: left;
-    padding: 10px 18px;
-    border-left: 3px solid transparent;
+    padding: {S2}px {S4}px;
+    border-left: 2px solid transparent;
+    font-size: {FS_BODY}px;
 }}
-QPushButton#NavButton:hover {{ background: #141826; color: #ffffff; }}
+QPushButton#NavButton:hover {{ background: {ELEV_2}; color: {TEXT_HI}; }}
 QPushButton#NavButton:checked {{
-    background: #141826;
-    color: #ffffff;
-    border-left: 3px solid {ACCENT};
+    background: {ELEV_3};
+    color: {TEXT_HI};
+    border-left: 2px solid {ACCENT};
 }}
 
+/* ---------------- Page chrome ---------------- */
 #PageHeader {{
-    font-size: 22px;
+    color: {TEXT_HI};
+    font-size: {FS_PAGE}px;
     font-weight: 600;
-    padding: 24px 32px 4px 32px;
+    letter-spacing: -0.3px;
+    padding: {S6}px {S7}px {S1}px {S7}px;
 }}
 #PageSubtitle {{
     color: {TEXT_DIM};
-    padding: 0 32px 18px 32px;
+    font-size: {FS_BODY}px;
+    padding: 0 {S7}px {S4}px {S7}px;
 }}
 
+/* ---------------- Cards ---------------- */
 QFrame#Card {{
-    background: {BG_CARD};
+    background: {ELEV_2};
     border: 1px solid {BORDER};
-    border-radius: 10px;
+    border-radius: 8px;
 }}
 QFrame#Card:hover {{
-    background: {BG_CARD_HI};
+    background: {ELEV_3};
     border: 1px solid {BORDER_HI};
 }}
 
+/* ---------------- Buttons ---------------- */
 QPushButton {{
-    background: #1b1f2c;
+    background: {ELEV_2};
     color: {TEXT};
-    border: 1px solid #262b3d;
+    border: 1px solid {BORDER_HI};
     border-radius: 6px;
-    padding: 8px 14px;
+    padding: {S2}px {S4}px;
+    font-size: {FS_BODY}px;
 }}
-QPushButton:hover {{ background: #232940; border-color: {BORDER_HI}; }}
-QPushButton:disabled {{ color: {TEXT_FAINT}; background: #15192a; border-color: {BORDER}; }}
+QPushButton:hover {{ background: {ELEV_3}; border-color: {ACCENT_LO}; }}
+QPushButton:pressed {{ background: {ELEV_4}; }}
+QPushButton:disabled {{
+    color: {TEXT_FAINT};
+    background: {ELEV_2};
+    border-color: {BORDER};
+}}
 QPushButton#Primary {{
     background: {ACCENT};
     border: 1px solid {ACCENT};
     color: white;
+    font-weight: 500;
 }}
 QPushButton#Primary:hover {{ background: {ACCENT_HI}; border-color: {ACCENT_HI}; }}
-QPushButton#Primary:disabled {{ background: #2a3760; border-color: #2a3760; color: #93a3c9; }}
-QPushButton#Danger {{
-    background: #2a1820;
-    color: {DANGER};
-    border: 1px solid #4a2030;
+QPushButton#Primary:pressed {{ background: {ACCENT}; }}
+QPushButton#Primary:disabled {{
+    background: {ACCENT_LO};
+    border-color: {ACCENT_LO};
+    color: {TEXT_DIM};
 }}
-QPushButton#Danger:hover {{ background: #3a1c28; }}
+QPushButton#Danger {{
+    background: transparent;
+    color: {DOT_ERROR};
+    border: 1px solid {BORDER_HI};
+}}
+QPushButton#Danger:hover {{ background: {ELEV_3}; border-color: {DOT_ERROR}; }}
 
+/* ---------------- Inputs ---------------- */
 QLineEdit, QPlainTextEdit, QTextBrowser, QListWidget, QTreeWidget {{
-    background: {BG_INPUT};
-    color: {TEXT};
+    background: {ELEV_4};
+    color: {TEXT_HI};
     border: 1px solid {BORDER};
     border-radius: 6px;
-    padding: 6px;
+    padding: {S2}px {S3}px;
     selection-background-color: {ACCENT};
+    selection-color: white;
+    font-size: {FS_BODY}px;
 }}
+QLineEdit::placeholder, QPlainTextEdit::placeholder {{ color: {TEXT_FAINT}; }}
 QLineEdit:focus, QPlainTextEdit:focus, QTextBrowser:focus,
 QListWidget:focus, QTreeWidget:focus {{
     border: 1px solid {ACCENT};
+    background: {ELEV_4};
 }}
 
-QCheckBox {{ spacing: 8px; color: {TEXT}; }}
+/* ---------------- ComboBox ---------------- */
+QComboBox {{
+    background: {ELEV_4};
+    color: {TEXT_HI};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+    padding: {S2}px {S3}px;
+    font-size: {FS_BODY}px;
+    min-height: 20px;
+}}
+QComboBox:hover {{ border-color: {BORDER_HI}; }}
+QComboBox:focus, QComboBox:on {{ border-color: {ACCENT}; }}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    width: 22px;
+    border: none;
+    background: transparent;
+}}
+QComboBox::down-arrow {{
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {TEXT_DIM};
+    margin-right: 8px;
+}}
+QComboBox QAbstractItemView {{
+    background: {ELEV_4};
+    color: {TEXT_HI};
+    border: 1px solid {BORDER_HI};
+    border-radius: 6px;
+    padding: {S1}px;
+    selection-background-color: {ACCENT_LO};
+    selection-color: {TEXT_HI};
+    outline: 0;
+}}
+
+/* ---------------- Checkboxes ---------------- */
+QCheckBox {{ spacing: {S2}px; color: {TEXT}; font-size: {FS_BODY}px; }}
 QCheckBox::indicator {{
-    width: 16px; height: 16px;
+    width: 14px; height: 14px;
     border: 1px solid {BORDER_HI};
     border-radius: 3px;
-    background: {BG_INPUT};
+    background: {ELEV_4};
 }}
+QCheckBox::indicator:hover {{ border-color: {ACCENT}; }}
 QCheckBox::indicator:checked {{
     background: {ACCENT};
     border: 1px solid {ACCENT};
-    image: none;
 }}
 
+/* ---------------- Scrollbar ---------------- */
 QScrollBar:vertical {{
-    background: transparent; width: 10px; margin: 4px 2px 4px 2px;
+    background: transparent;
+    width: 10px;
+    margin: {S1}px {S1}px {S1}px {S1}px;
 }}
 QScrollBar::handle:vertical {{
-    background: #2a3149; border-radius: 4px; min-height: 24px;
+    background: {BORDER_HI};
+    border-radius: 3px;
+    min-height: 28px;
 }}
-QScrollBar::handle:vertical:hover {{ background: #3a4366; }}
+QScrollBar::handle:vertical:hover {{ background: {TEXT_FAINT}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 
+/* ---------------- Status bar ---------------- */
 QStatusBar {{
-    background: {BG_PANEL};
-    color: {TEXT_FAINT};
+    background: {ELEV_0};
+    color: {TEXT_DIM};
     border-top: 1px solid {BORDER};
 }}
+QStatusBar::item {{ border: none; }}
 QLabel#StatusItem {{
     color: {TEXT_DIM};
-    padding: 0 10px;
+    font-size: {FS_META}px;
+    padding: 0 {S3}px;
     border-left: 1px solid {BORDER};
 }}
 
-/* status pills used by WorkerTile and step cards */
-QLabel#WorkerStatusIdle {{
-    color: {TEXT_FAINT};
-    background: #1a1f2e;
-    padding: 2px 8px;
-    border-radius: 9px;
-    font-size: 11px;
-}}
-QLabel#WorkerStatusRunning {{
-    color: {WARNING};
-    background: #2a2316;
-    padding: 2px 8px;
-    border-radius: 9px;
-    font-size: 11px;
-}}
-QLabel#WorkerStatusDone {{
-    color: {SUCCESS};
-    background: #14291f;
-    padding: 2px 8px;
-    border-radius: 9px;
-    font-size: 11px;
-}}
+/* ---------------- Status pills (dot + text, no chip) ---------------- */
+QLabel#WorkerStatusIdle,
+QLabel#WorkerStatusRunning,
+QLabel#WorkerStatusDone,
 QLabel#WorkerStatusError {{
-    color: {DANGER};
-    background: #2a1820;
-    padding: 2px 8px;
-    border-radius: 9px;
-    font-size: 11px;
+    font-size: {FS_CAPS}px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    padding: 0;
+    background: transparent;
+    border: none;
 }}
+QLabel#WorkerStatusIdle    {{ color: {DOT_IDLE}; }}
+QLabel#WorkerStatusRunning {{ color: {DOT_RUNNING}; }}
+QLabel#WorkerStatusDone    {{ color: {DOT_DONE}; }}
+QLabel#WorkerStatusError   {{ color: {DOT_ERROR}; }}
 
-/* empty state */
+/* ---------------- Empty state ---------------- */
 #EmptyStateCard {{
-    background: {BG_CARD};
+    background: {ELEV_2};
     border: 1px dashed {BORDER_HI};
-    border-radius: 12px;
+    border-radius: 10px;
     min-width: 360px;
     max-width: 480px;
 }}
 QLabel#EmptyStateGlyph {{ color: {TEXT_FAINT}; font-size: 36px; }}
-QLabel#EmptyStateTitle {{ color: {TEXT}; font-size: 16px; font-weight: 600; }}
-QLabel#EmptyStateHint  {{ color: {TEXT_DIM}; }}
+QLabel#EmptyStateTitle {{
+    color: {TEXT_HI};
+    font-size: {FS_TITLE}px;
+    font-weight: 600;
+}}
+QLabel#EmptyStateHint {{ color: {TEXT_DIM}; font-size: {FS_BODY}px; }}
+
+/* ---------------- Tooltip ---------------- */
+QToolTip {{
+    background: {ELEV_4};
+    color: {TEXT_HI};
+    border: 1px solid {BORDER_HI};
+    border-radius: 4px;
+    padding: {S1}px {S2}px;
+    font-size: {FS_META}px;
+}}
 """
 
 
