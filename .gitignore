@@ -20,6 +20,7 @@ env/
 
 # Evidence store output
 .parallel-agents-output/
+.parallel-agents/
 
 # PyInstaller
 *.spec.bak

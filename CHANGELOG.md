@@ -12,16 +12,26 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - per-run job inspection endpoint (`GET /runs/{run_id}/jobs`)
   - cancel endpoint (`POST /runs/{run_id}/cancel`)
   - retry endpoint (`POST /runs/{run_id}/retry`)
+  - metrics summary endpoint (`GET /metrics/summary`)
+  - artifact payload endpoint (`GET /runs/{run_id}/artifacts/{artifact_name}`)
   - incremental run lifecycle events for queue execution
 - Optional gateway API-key auth for non-local usage:
   - `PA_GATEWAY_API_KEY` environment support
   - `parallel-agents gateway start --api-key ...`
   - header auth via `X-PA-API-Key` or `Authorization: Bearer ...`
+- Local desktop/project office foundation:
+  - `parallel-agents office init`
+  - `parallel-agents office status`
+  - `parallel-agents office home`
+  - `parallel-agents office artifacts`
+  - project-folder workspace under `.parallel-agents/`
+  - standalone binary spec includes the project-office module
 - New gateway workflow doc: `docs/workflows/gateway-api.md`
+- New desktop office workflow doc: `docs/workflows/local-desktop-office.md`
 
 ### Changed
-- README now documents gateway endpoints, queue behavior, and auth usage.
-- Roadmap and project status updated to reflect Phase 3 progress.
+- README now documents local project-office usage, gateway endpoints, queue behavior, and auth usage.
+- Roadmap and project status pivot Phase 4 from web dashboard to local desktop office.
 
 ## [0.4.2] - 2026-05-21
 

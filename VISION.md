@@ -87,7 +87,6 @@ The next product layer should add:
 - Project/session state.
 - Idea-to-release orchestration.
 - Remote MCP API surface.
-- No-code web dashboard.
+- Local desktop/project-folder office.
 - GitHub-first delivery.
 - Evaluation metrics that prove productivity and effectiveness.
-

@@ -15,7 +15,7 @@ Idea -> PR/FAQ -> Tech stack decision -> Architecture RFC -> Roadmap
      -> Sprint -> Implementation -> Review -> Release -> Learning
 ```
 
-The current package focuses on the engine plus local workflow orchestration: CLI, MCP server, specialist workers, evidence storage, patch generation, evaluation metrics, and a local gateway/job system with queueing, retry/cancel controls, and optional API-key protection.
+The current package focuses on a local-first project office: CLI, standalone binary packaging, MCP server, specialist workers, evidence storage, patch generation, evaluation metrics, and a project-folder workspace under `.parallel-agents/`.
 
 ## Architecture
 
@@ -107,7 +107,15 @@ parallel-agents company apply --run-id run-123
 # Optional explicit policy override at apply time
 parallel-agents company apply --run-id run-123 --policy-file company/apply-policy.json
 
-# Local gateway for future no-code surfaces
+# Initialize a project-folder office workspace
+parallel-agents office init --project ./my-project --name "My Project"
+parallel-agents office status --project ./my-project
+parallel-agents office home --project ./my-project
+parallel-agents office artifacts --project ./my-project
+parallel-agents office artifacts --project ./my-project --run-id run-123
+parallel-agents office artifacts --project ./my-project --run-id run-123 --artifact roadmap
+
+# Internal local gateway/job API
 parallel-agents gateway start --host 127.0.0.1 --port 8733
 
 # Optional API key protection (recommended when binding beyond localhost)
@@ -128,14 +136,42 @@ parallel-agents gateway start --api-key my-secret
 | `parallel-agents history` | List all previous runs |
 | `parallel-agents init` | Generate default configuration |
 | `parallel-agents company ...` | Generate company workflow artifacts (brief, stack, RFC, roadmap, issue plan, release checks) |
+| `parallel-agents office ...` | Create and inspect a local `.parallel-agents/` project workspace |
 | `parallel-agents eval run/score` | Run and score productivity/effectiveness benchmarks |
 | `parallel-agents gateway start` | Start the local project/run/job API |
+
+## Local Project Office
+
+The product direction is local `.exe` first. A project workspace lives inside the repository or project folder:
+
+```text
+my-project/
+  .parallel-agents/
+    project.json
+    runs/
+    artifacts/
+    approvals/
+    audit/
+    metrics/
+```
+
+Initialize it with:
+
+```bash
+parallel-agents office init --project ./my-project --name "My Project"
+parallel-agents office status --project ./my-project
+parallel-agents office home --project ./my-project
+parallel-agents office artifacts --project ./my-project
+```
+
+The gateway remains an internal job API for local automation and future desktop shells. It is not the primary product UI.
 
 ## Gateway API
 
 The local gateway exposes a persistent API for projects, runs, jobs, artifacts, and audit events.
 
 - `GET /health`
+- `GET /metrics/summary`
 - `POST /projects`
 - `GET /projects`
 - `GET /projects/{project_id}`
@@ -149,6 +185,7 @@ The local gateway exposes a persistent API for projects, runs, jobs, artifacts, 
 - `POST /runs/{run_id}/cancel`
 - `POST /runs/{run_id}/retry`
 - `GET /runs/{run_id}/jobs`
+- `GET /runs/{run_id}/artifacts/{artifact_name}`
 - `GET /runs/{run_id}/artifacts`
 - `GET /runs/{run_id}/events`
 
@@ -243,6 +280,7 @@ export PA_STORE_BACKEND=sqlite
 - Evidence storage for run history (`file` or `sqlite`).
 - Company workflow artifacts from idea intake through post-release review.
 - Approval-gated GitHub issue planning with apply-time policy checks.
+- Local `.parallel-agents/` project workspace for desktop/exe-first usage.
 - Optional local gateway for persistent project/run state.
 
 ## Current Limitations
@@ -251,6 +289,7 @@ export PA_STORE_BACKEND=sqlite
 - GitHub issue mode requires `gh` installation and authentication.
 - Output quality still depends on model behavior and repository context quality.
 - Gateway binds to localhost by default; non-local exposure should use API-key protection at minimum.
+- No web dashboard is shipped; the product direction is local project-folder tooling.
 
 ## Evaluation Harness
 
@@ -300,6 +339,7 @@ Scoring includes:
 - [ROADMAP.md](ROADMAP.md)
 - [docs/workflows/idea-to-release.md](docs/workflows/idea-to-release.md)
 - [docs/workflows/agent-roles.md](docs/workflows/agent-roles.md)
+- [docs/workflows/local-desktop-office.md](docs/workflows/local-desktop-office.md)
 - [docs/workflows/gateway-api.md](docs/workflows/gateway-api.md)
 - [CHANGELOG.md](CHANGELOG.md)
 - [COMPATIBILITY.md](COMPATIBILITY.md)

@@ -4,7 +4,7 @@
 
 `parallel-agents` is now more than a parallel code-analysis CLI. It is becoming the engine for **Parallel Agents Office**, a no-code AI software company workflow that moves from idea to release through structured artifacts, approval gates, and measurable quality signals.
 
-The current release line is focused on local, reviewable workflows. Hosted services, OAuth, and a full dashboard are intentionally deferred until the local gateway is stable.
+The current release line is focused on local, reviewable workflows and a project-folder workspace. Hosted services, OAuth, and web/mobile dashboards are intentionally deferred.
 
 ## Implemented
 
@@ -38,6 +38,12 @@ The current release line is focused on local, reviewable workflows. Hosted servi
   - run listing plus per-run job inspection
   - cancel and retry controls
   - optional API-key protection for non-local exposure
+- Local desktop/project office foundation:
+  - `.parallel-agents/` workspace inside a project folder
+  - `office init`, `office status`, and `office home` commands
+  - `office artifacts` for run-linked artifact inspection
+  - workspace directories for runs, artifacts, approvals, audit, and metrics
+  - PyInstaller spec support for the project-office module
 
 ## Experimental
 
@@ -59,6 +65,13 @@ parallel-agents company apply --run-id run-123
 ```
 
 ```bash
+parallel-agents office init --project . --name "Project Name"
+parallel-agents office status --project .
+parallel-agents office home --project .
+parallel-agents office artifacts --project .
+```
+
+```bash
 parallel-agents gateway start --host 127.0.0.1 --port 8733
 
 # optional auth for non-local use
@@ -68,7 +81,7 @@ parallel-agents gateway start --host 0.0.0.0 --port 8733
 
 ## Known Limitations
 
-- No full no-code dashboard yet.
+- No native desktop GUI yet; current project-office surface is CLI/binary commands.
 - No hosted MCP endpoint or OAuth yet.
 - No distributed/remote worker execution beyond the current local in-process queue.
 - No hosted-grade auth model yet (OAuth/JWT/session).
@@ -77,9 +90,10 @@ parallel-agents gateway start --host 0.0.0.0 --port 8733
 
 ## Next Milestone
 
-Build the first no-code dashboard surface on top of the gateway:
+Expand the local desktop office into a full `.exe` product surface:
 
-- connect project and run state to UI workflows
-- stream run status/events into the UI
-- review and trigger approve/apply flows from UI
-- keep write actions approval-gated and policy-checked
+- project picker and local workspace home
+- artifact browser and approval queue
+- GitHub connect + repository integration
+- PR creation and review actions from the local office
+- richer release and productivity views

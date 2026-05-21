@@ -74,6 +74,18 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     return default
 
 
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 def _resolve_gateway_api_key(api_key: str | None) -> str | None:
     raw = api_key if api_key is not None else os.getenv("PA_GATEWAY_API_KEY")
     if raw is None:
@@ -370,6 +382,64 @@ class GatewayStore:
             payload["payload"] = json.loads(payload.pop("payload_json") or "{}")
             events.append(payload)
         return events
+
+    def get_metrics_summary(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            project_count = int(conn.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"])
+            run_count = int(conn.execute("SELECT COUNT(*) AS c FROM runs").fetchone()["c"])
+            status_rows = conn.execute(
+                "SELECT status, COUNT(*) AS c FROM runs GROUP BY status ORDER BY status ASC"
+            ).fetchall()
+            kind_rows = conn.execute(
+                "SELECT kind, COUNT(*) AS c FROM runs GROUP BY kind ORDER BY kind ASC"
+            ).fetchall()
+            run_rows = conn.execute(
+                """
+                SELECT id, status, kind, created_at, updated_at
+                FROM runs
+                ORDER BY updated_at DESC
+                LIMIT 1000
+                """
+            ).fetchall()
+
+        status_counts = {str(row["status"]): int(row["c"]) for row in status_rows}
+        kind_counts = {str(row["kind"]): int(row["c"]) for row in kind_rows}
+
+        terminal_durations: list[float] = []
+        for row in run_rows:
+            status = str(row["status"])
+            if status not in TERMINAL_RUN_STATUSES:
+                continue
+            created = _parse_iso_datetime(row["created_at"])
+            updated = _parse_iso_datetime(row["updated_at"])
+            if not created or not updated:
+                continue
+            duration_seconds = (updated - created).total_seconds()
+            if duration_seconds >= 0:
+                terminal_durations.append(duration_seconds)
+
+        avg_terminal_run_seconds = (
+            round(sum(terminal_durations) / len(terminal_durations), 3)
+            if terminal_durations
+            else None
+        )
+        succeeded_count = status_counts.get("succeeded", 0)
+        failed_like_count = status_counts.get("failed", 0) + status_counts.get("blocked_by_policy", 0)
+        success_rate = round(succeeded_count / run_count, 4) if run_count else None
+
+        return {
+            "project_count": project_count,
+            "run_count": run_count,
+            "status_counts": status_counts,
+            "kind_counts": kind_counts,
+            "succeeded_count": succeeded_count,
+            "failed_like_count": failed_like_count,
+            "waiting_for_approval_count": status_counts.get("waiting_for_approval", 0),
+            "blocked_by_policy_count": status_counts.get("blocked_by_policy", 0),
+            "success_rate": success_rate,
+            "average_terminal_run_seconds": avg_terminal_run_seconds,
+            "computed_at": _utc_now(),
+        }
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
@@ -822,7 +892,8 @@ def create_gateway_app(
     async def _api_key_auth_middleware(request: Request, call_next):
         if not resolved_api_key:
             return await call_next(request)
-        if request.url.path == "/health":
+        path = request.url.path
+        if path == "/health":
             return await call_next(request)
         if _request_has_valid_api_key(request):
             return await call_next(request)
@@ -958,6 +1029,10 @@ def create_gateway_app(
         )
         return {"runs": runs, "count": len(runs)}
 
+    @app.get("/metrics/summary")
+    def metrics_summary() -> dict[str, Any]:
+        return store.get_metrics_summary()
+
     @app.get("/runs/{run_id}")
     def get_run(run_id: str) -> dict[str, Any]:
         run = store.get_run(run_id)
@@ -1008,6 +1083,20 @@ def create_gateway_app(
                 timeout_seconds = 30.0
             return runner.wait_for_terminal(requeued["id"], timeout_seconds=timeout_seconds) or requeued
         return store.get_run(requeued["id"]) or requeued
+
+    @app.get("/runs/{run_id}/artifacts/{artifact_name}")
+    def get_run_artifact(run_id: str, artifact_name: str) -> dict[str, Any]:
+        run = store.get_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="run not found")
+        artifact = load_company_artifact(store.output_dir, run_id, artifact_name)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="artifact not found")
+        return {
+            "run_id": run_id,
+            "artifact_name": artifact_name,
+            "artifact": artifact,
+        }
 
     @app.get("/runs/{run_id}/artifacts")
     def get_run_artifacts(run_id: str) -> dict[str, Any]:

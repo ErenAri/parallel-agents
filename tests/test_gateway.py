@@ -257,3 +257,30 @@ def test_gateway_api_key_auth(monkeypatch, tmp_path):
     )
     assert bearer.status_code == 200
     assert bearer.json()["count"] == 1
+
+def test_gateway_metrics_summary(tmp_path):
+    app = create_gateway_app(tmp_path)
+    client = TestClient(app)
+
+    metrics = client.get("/metrics/summary")
+    assert metrics.status_code == 200
+    payload = metrics.json()
+    assert "project_count" in payload
+    assert "run_count" in payload
+
+
+def test_gateway_artifact_payload_endpoint(tmp_path):
+    app = create_gateway_app(tmp_path)
+    client = TestClient(app)
+
+    roadmap_run = client.post(
+        "/runs/company/roadmap",
+        json={"run_id": "run-artifact", "idea": "Build roadmap endpoint"},
+    ).json()
+    assert roadmap_run["status"] == "succeeded"
+
+    artifact = client.get("/runs/run-artifact/artifacts/roadmap")
+    assert artifact.status_code == 200
+    body = artifact.json()
+    assert body["artifact_name"] == "roadmap"
+    assert body["artifact"]["name"].endswith("Roadmap")

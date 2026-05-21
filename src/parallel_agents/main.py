@@ -58,6 +58,16 @@ from parallel_agents.evidence_store import create_evidence_store
 from parallel_agents.models import FinalOutput
 from parallel_agents.patch_tools import apply_unified_diff
 from parallel_agents.pipeline import Pipeline
+from parallel_agents.project_office import (
+    get_project_office_status,
+    init_project_office,
+    list_office_run_ids,
+    office_output_dir,
+)
+from parallel_agents.tools.github_apply import (
+    execute_company_issue_plan as _execute_company_issue_plan,
+    issue_field as _issue_field,
+)
 from parallel_agents.tools.github_tools import (
     create_issue,
     ensure_milestone,
@@ -1444,9 +1454,248 @@ def company_artifacts(run_id: str, output_dir: str, json_output: bool) -> None:
     console.print(table)
 
 
+@cli.group(name="office")
+def office_group() -> None:
+    """Local project-folder office workspace commands."""
+    pass
+
+
+@office_group.command(name="init")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder where .parallel-agents will be created.",
+)
+@click.option("--name", default=None, help="Optional project display name.")
+@click.option("--json-output/--no-json-output", default=False, help="Print workspace metadata as JSON.")
+def office_init(project_path: Path, name: str | None, json_output: bool) -> None:
+    """Create a local .parallel-agents workspace inside a project folder."""
+    payload = init_project_office(project_path, name=name)
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    console.print(Panel(
+        "\n".join([
+            f"Project: {payload['name']}",
+            f"Root: {payload['project_root']}",
+            f"Office: {payload['office_dir']}",
+        ]),
+        title="Project Office Initialized",
+        border_style="green",
+    ))
+
+
+@office_group.command(name="status")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print status as JSON.")
+def office_status(project_path: Path, json_output: bool) -> None:
+    """Show local project-office workspace status."""
+    status = get_project_office_status(project_path)
+    if json_output:
+        click.echo(json.dumps(status, indent=2, default=str))
+        return
+
+    project = status.get("project") or {}
+    console.print(Panel(
+        "\n".join([
+            f"Initialized: {status['initialized']}",
+            f"Project: {project.get('name', '-')}",
+            f"Root: {status['project_root']}",
+            f"Office: {status['office_dir']}",
+            f"Gateway DB: {'present' if status['gateway_db_exists'] else 'missing'}",
+        ]),
+        title="Project Office",
+        border_style="blue" if status["initialized"] else "yellow",
+    ))
+
+    table = Table(title="Workspace Directories")
+    table.add_column("Name")
+    table.add_column("Exists")
+    table.add_column("Path")
+    for name, path in status["directories"].items():
+        table.add_row(name, "yes" if status["directory_exists"][name] else "no", path)
+    console.print(table)
+
+
+@office_group.command(name="home")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print home summary as JSON.")
+def office_home(project_path: Path, json_output: bool) -> None:
+    """Show project-office home summary including recent run artifacts."""
+    status, output_root = _resolve_initialized_office(project_path)
+    run_ids = list_office_run_ids(project_path)
+
+    run_summaries: list[dict[str, Any]] = []
+    total_artifact_count = 0
+    for run_id in run_ids:
+        artifacts = list_company_artifact_paths(output_root, run_id)
+        total_artifact_count += len(artifacts)
+        run_summaries.append(
+            {
+                "run_id": run_id,
+                "artifact_count": len(artifacts),
+                "artifacts": sorted(artifacts.keys()),
+            }
+        )
+
+    payload = {
+        "project": status.get("project") or {},
+        "project_root": status["project_root"],
+        "office_dir": status["office_dir"],
+        "output_dir": output_root,
+        "run_count": len(run_ids),
+        "artifact_count": total_artifact_count,
+        "recent_runs": run_summaries[:5],
+        "directory_exists": status.get("directory_exists", {}),
+        "gateway_db_exists": status["gateway_db_exists"],
+    }
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    project = payload["project"]
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"Project: {project.get('name', '-')}",
+                    f"Root: {payload['project_root']}",
+                    f"Office: {payload['office_dir']}",
+                    f"Runs with artifacts: {payload['run_count']}",
+                    f"Total artifacts: {payload['artifact_count']}",
+                    f"Gateway DB: {'present' if payload['gateway_db_exists'] else 'missing'}",
+                ]
+            ),
+            title="Office Home",
+            border_style="blue",
+        )
+    )
+
+    recent_table = Table(title="Recent Artifact Runs")
+    recent_table.add_column("Run ID")
+    recent_table.add_column("Artifacts", justify="right")
+    recent_table.add_column("Names")
+    if payload["recent_runs"]:
+        for run in payload["recent_runs"]:
+            names = ", ".join(run["artifacts"]) if run["artifacts"] else "-"
+            recent_table.add_row(run["run_id"], str(run["artifact_count"]), names)
+    else:
+        recent_table.add_row("-", "0", "No run-linked artifacts found")
+    console.print(recent_table)
+
+
+@office_group.command(name="artifacts")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option("--run-id", default=None, help="Optional run id. If omitted, list runs with artifact counts.")
+@click.option("--artifact", default=None, help="Optional artifact name for --run-id, e.g. roadmap.")
+@click.option("--json-output/--no-json-output", default=False, help="Print artifact payload as JSON.")
+def office_artifacts(
+    project_path: Path,
+    run_id: str | None,
+    artifact: str | None,
+    json_output: bool,
+) -> None:
+    """List or inspect run-linked artifacts from the local office workspace."""
+    _, output_root = _resolve_initialized_office(project_path)
+
+    if artifact and not run_id:
+        click.echo("--artifact requires --run-id.", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if run_id and artifact:
+        payload = load_company_artifact(output_root, run_id, artifact)
+        if payload is None:
+            click.echo(f"Artifact '{artifact}' not found for run '{run_id}'.", err=True)
+            sys.exit(EXIT_RUNTIME_FAILURE)
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    if run_id:
+        artifacts = list_company_artifact_paths(output_root, run_id)
+        payload = {
+            "project_root": str(project_path.resolve()),
+            "output_dir": output_root,
+            "run_id": run_id,
+            "count": len(artifacts),
+            "artifacts": artifacts,
+        }
+        if json_output:
+            click.echo(json.dumps(payload, indent=2, default=str))
+            return
+
+        table = Table(title=f"Office Artifacts ({run_id})")
+        table.add_column("Artifact")
+        table.add_column("Path")
+        for name, path in sorted(artifacts.items()):
+            table.add_row(name, path)
+        if not artifacts:
+            table.add_row("-", "No artifacts found")
+        console.print(table)
+        return
+
+    run_ids = list_office_run_ids(project_path)
+    run_rows: list[dict[str, Any]] = []
+    for rid in run_ids:
+        artifacts = list_company_artifact_paths(output_root, rid)
+        run_rows.append(
+            {
+                "run_id": rid,
+                "artifact_count": len(artifacts),
+                "artifacts": sorted(artifacts.keys()),
+            }
+        )
+
+    payload = {
+        "project_root": str(project_path.resolve()),
+        "output_dir": output_root,
+        "run_count": len(run_rows),
+        "runs": run_rows,
+    }
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    table = Table(title="Office Artifact Runs")
+    table.add_column("Run ID")
+    table.add_column("Artifacts", justify="right")
+    table.add_column("Names")
+    if run_rows:
+        for row in run_rows:
+            names = ", ".join(row["artifacts"]) if row["artifacts"] else "-"
+            table.add_row(row["run_id"], str(row["artifact_count"]), names)
+    else:
+        table.add_row("-", "0", "No run-linked artifacts found")
+    console.print(table)
+
+
 @cli.group(name="gateway")
 def gateway_group() -> None:
-    """Local gateway and job API for no-code workflows."""
+    """Local gateway and job API for project-office workflows."""
     pass
 
 
@@ -1625,6 +1874,19 @@ def mcp_install(target: str, scope: str) -> None:
     console.print(result)
 
 
+def _resolve_initialized_office(project_path: Path) -> tuple[dict[str, Any], str]:
+    status = get_project_office_status(project_path)
+    if not status.get("initialized"):
+        click.echo(
+            "Project office is not initialized. Run: "
+            f"parallel-agents office init --project {project_path}",
+            err=True,
+        )
+        sys.exit(EXIT_RUNTIME_FAILURE)
+    output_root = str(office_output_dir(project_path))
+    return status, output_root
+
+
 def _resolve_repo_path(repo: str | None, task: str) -> str | None:
     if repo:
         return repo
@@ -1667,86 +1929,6 @@ def _has_parse_failure(result: FinalOutput) -> bool:
         if worker_result.token_usage.get("parsed_structured_output") == 0:
             return True
     return False
-
-
-async def _execute_company_issue_plan(
-    *,
-    owner: str,
-    repo: str,
-    issue_plan: list[Any],
-    create_milestones: bool,
-    dry_run: bool,
-) -> dict[str, Any]:
-    milestone_results: list[dict[str, Any]] = []
-    issue_results: list[dict[str, Any]] = []
-    milestone_seen: set[str] = set()
-    normalized_plan: list[dict[str, Any]] = []
-
-    for planned_issue in issue_plan:
-        source_item_id = str(_issue_field(planned_issue, "source_item_id", ""))
-        title = str(_issue_field(planned_issue, "title", ""))
-        body = str(_issue_field(planned_issue, "body", ""))
-        milestone_name = str(_issue_field(planned_issue, "milestone", ""))
-        raw_labels = _issue_field(planned_issue, "labels", [])
-        labels = list(raw_labels) if isinstance(raw_labels, list) else []
-
-        normalized_plan.append({
-            "source_item_id": source_item_id,
-            "title": title,
-            "body": body,
-            "milestone": milestone_name,
-            "labels": labels,
-        })
-
-        if milestone_name and milestone_name not in milestone_seen:
-            milestone_seen.add(milestone_name)
-            milestone_entry = {
-                "title": milestone_name,
-                "ensured": False,
-                "created": False,
-                "status": "skipped",
-            }
-            if create_milestones:
-                if dry_run:
-                    milestone_entry["status"] = "planned"
-                else:
-                    ensured = await ensure_milestone(owner, repo, milestone_name)
-                    milestone_entry["ensured"] = ensured is not None
-                    milestone_entry["created"] = ensured is not None
-                    milestone_entry["status"] = "ensured" if ensured else "failed"
-            milestone_results.append(milestone_entry)
-
-        issue_entry = {
-            "source_item_id": source_item_id,
-            "title": title,
-            "milestone": milestone_name,
-            "labels": labels,
-            "created": False,
-            "url": None,
-            "status": "planned" if dry_run else "pending",
-        }
-        if not dry_run:
-            issue_url = await create_issue(
-                owner,
-                repo,
-                title,
-                body,
-                milestone=milestone_name or None,
-                labels=labels,
-            )
-            issue_entry["created"] = issue_url is not None
-            issue_entry["url"] = issue_url
-            issue_entry["status"] = "created" if issue_url else "failed"
-        issue_results.append(issue_entry)
-
-    return {
-        "repo": f"{owner}/{repo}",
-        "dry_run": dry_run,
-        "milestones": milestone_results,
-        "issues": issue_results,
-        "issue_plan": normalized_plan,
-        "create_milestones": create_milestones,
-    }
 
 
 def _build_pending_company_issue_plan(
@@ -1868,12 +2050,6 @@ def _attach_run_metadata(
             if isinstance(entry, dict):
                 entry["run_id"] = run_id
                 entry["artifact_name"] = artifact_name
-
-
-def _issue_field(issue: Any, key: str, default: Any) -> Any:
-    if isinstance(issue, dict):
-        return issue.get(key, default)
-    return getattr(issue, key, default)
 
 
 def _fmt_percent(value: float | None) -> str:
