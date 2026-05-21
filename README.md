@@ -15,7 +15,7 @@ Idea -> PR/FAQ -> Tech stack decision -> Architecture RFC -> Roadmap
      -> Sprint -> Implementation -> Review -> Release -> Learning
 ```
 
-The current package focuses on the engine: CLI, MCP server, specialist workers, evidence storage, patch generation, and evaluation metrics. The next product layer will add company workflow models, GitHub-first project management, a gateway/job system, and a no-code dashboard.
+The current package focuses on the engine plus local workflow orchestration: CLI, MCP server, specialist workers, evidence storage, patch generation, evaluation metrics, and a local gateway/job system with queueing, retry/cancel controls, and optional API-key protection.
 
 ## Architecture
 
@@ -109,6 +109,13 @@ parallel-agents company apply --run-id run-123 --policy-file company/apply-polic
 
 # Local gateway for future no-code surfaces
 parallel-agents gateway start --host 127.0.0.1 --port 8733
+
+# Optional API key protection (recommended when binding beyond localhost)
+set PA_GATEWAY_API_KEY=my-secret
+parallel-agents gateway start --host 0.0.0.0 --port 8733
+
+# or explicit key via CLI
+parallel-agents gateway start --api-key my-secret
 ```
 
 ## CLI Commands
@@ -123,6 +130,40 @@ parallel-agents gateway start --host 127.0.0.1 --port 8733
 | `parallel-agents company ...` | Generate company workflow artifacts (brief, stack, RFC, roadmap, issue plan, release checks) |
 | `parallel-agents eval run/score` | Run and score productivity/effectiveness benchmarks |
 | `parallel-agents gateway start` | Start the local project/run/job API |
+
+## Gateway API
+
+The local gateway exposes a persistent API for projects, runs, jobs, artifacts, and audit events.
+
+- `GET /health`
+- `POST /projects`
+- `GET /projects`
+- `GET /projects/{project_id}`
+- `POST /runs/company/idea`
+- `POST /runs/company/roadmap`
+- `POST /runs/company/plan`
+- `POST /runs/company/approve`
+- `POST /runs/company/apply`
+- `GET /runs`
+- `GET /runs/{run_id}`
+- `POST /runs/{run_id}/cancel`
+- `POST /runs/{run_id}/retry`
+- `GET /runs/{run_id}/jobs`
+- `GET /runs/{run_id}/artifacts`
+- `GET /runs/{run_id}/events`
+
+Run endpoints support:
+
+- synchronous mode by default (`wait=true`)
+- async enqueue mode (`wait=false`)
+- custom wait timeout (`wait_timeout_seconds`)
+
+When `PA_GATEWAY_API_KEY` or `--api-key` is set, requests require either:
+
+- `X-PA-API-Key: <key>`, or
+- `Authorization: Bearer <key>`
+
+`/health` remains readable without auth for liveness checks.
 
 ### Run Options
 
@@ -209,7 +250,7 @@ export PA_STORE_BACKEND=sqlite
 - Generated patches should be reviewed before applying.
 - GitHub issue mode requires `gh` installation and authentication.
 - Output quality still depends on model behavior and repository context quality.
-- Gateway is local-only and intentionally binds to localhost by default.
+- Gateway binds to localhost by default; non-local exposure should use API-key protection at minimum.
 
 ## Evaluation Harness
 
@@ -259,6 +300,7 @@ Scoring includes:
 - [ROADMAP.md](ROADMAP.md)
 - [docs/workflows/idea-to-release.md](docs/workflows/idea-to-release.md)
 - [docs/workflows/agent-roles.md](docs/workflows/agent-roles.md)
+- [docs/workflows/gateway-api.md](docs/workflows/gateway-api.md)
 - [CHANGELOG.md](CHANGELOG.md)
 - [COMPATIBILITY.md](COMPATIBILITY.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)

@@ -1097,10 +1097,11 @@ def test_company_apply_fails_policy_check_before_writes(tmp_path, monkeypatch):
 def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
-    def fake_run_gateway_server(*, host, port, output_dir):
+    def fake_run_gateway_server(*, host, port, output_dir, api_key):
         captured["host"] = host
         captured["port"] = port
         captured["output_dir"] = output_dir
+        captured["api_key"] = api_key
 
     import parallel_agents.gateway as gateway_module
 
@@ -1115,3 +1116,29 @@ def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8733
     assert captured["output_dir"] == str(tmp_path)
+    assert captured["api_key"] is None
+
+
+def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def fake_run_gateway_server(*, host, port, output_dir, api_key):
+        captured["host"] = host
+        captured["port"] = port
+        captured["output_dir"] = output_dir
+        captured["api_key"] = api_key
+
+    import parallel_agents.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "run_gateway_server", fake_run_gateway_server)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["gateway", "start", "--output-dir", str(tmp_path), "--api-key", "secret-token"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8733
+    assert captured["output_dir"] == str(tmp_path)
+    assert captured["api_key"] == "secret-token"
