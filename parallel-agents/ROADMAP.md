@@ -71,7 +71,7 @@ Remaining:
 
 ## Phase 3: Gateway and Job System
 
-Status: started.
+Status: mostly complete.
 
 Goal: move from one-shot CLI runs to persistent local project sessions.
 
@@ -81,14 +81,16 @@ Completed:
 - Local FastAPI gateway command.
 - SQLite project/run/job/event store.
 - Basic company idea, roadmap, plan, approve, apply, artifacts, and events endpoints.
+- In-process job queue with persistent run/job status tracking.
+- Cancellation and retry controls for queued/failed/policy-blocked runs.
+- Run listing and per-run job inspection endpoints.
+- Incremental run event stream for enqueue/start/status/complete/cancel.
+- Optional API-key protection for non-local gateway exposure.
 
 Remaining:
 
-- Background worker queue.
-- Cancellation and retry controls.
-- More detailed event stream.
 - Gateway-backed UI integration.
-- Auth model for non-local deployments.
+- Hosted-grade auth for multi-tenant remote deployments (OAuth/JWT/session model).
 
 ## Phase 4: No-Code Web Dashboard
 
@@ -143,6 +145,6 @@ Remaining:
 
 ## Near-Term Priority
 
-The next high-impact work is to harden **Phase 3: Gateway and Job System**.
+The next high-impact work is **Phase 4: No-Code Web Dashboard** backed by the current gateway APIs.
 
-The gateway gives the future no-code dashboard and hosted MCP service a stable backend without forcing a UI rewrite or cloud deployment too early.
+The gateway now provides persistent runs, job state, artifacts, events, retry/cancel controls, and basic API-key protection, which is enough to start a practical UI without a backend rewrite.

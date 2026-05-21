@@ -34,6 +34,10 @@ The current release line is focused on local, reviewable workflows. Hosted servi
   - FastAPI app behind optional dependency group
   - SQLite project/run/job/event store
   - company idea, roadmap, plan, approve, apply, artifact, and event endpoints
+  - in-process queued execution with persistent run/job states
+  - run listing plus per-run job inspection
+  - cancel and retry controls
+  - optional API-key protection for non-local exposure
 
 ## Experimental
 
@@ -41,6 +45,7 @@ The current release line is focused on local, reviewable workflows. Hosted servi
 - Gateway is local-only and should bind to `127.0.0.1` by default.
 - GitHub write operations require external `gh` authentication and should remain approval-gated.
 - Evaluation scores depend on manual annotations for acceptance, regressions, and finding precision.
+- Queue worker is in-process/local (single-node), not a distributed job system.
 
 ## How To Run Current Workflows
 
@@ -55,22 +60,26 @@ parallel-agents company apply --run-id run-123
 
 ```bash
 parallel-agents gateway start --host 127.0.0.1 --port 8733
+
+# optional auth for non-local use
+set PA_GATEWAY_API_KEY=my-secret
+parallel-agents gateway start --host 0.0.0.0 --port 8733
 ```
 
 ## Known Limitations
 
 - No full no-code dashboard yet.
 - No hosted MCP endpoint or OAuth yet.
-- No background queue worker beyond the current local job records.
+- No distributed/remote worker execution beyond the current local in-process queue.
+- No hosted-grade auth model yet (OAuth/JWT/session).
 - No automated GitHub PR creation/commenting in this checkpoint.
 - Package publishing is still manual and should only happen after release checks pass.
 
 ## Next Milestone
 
-Harden the local gateway/job system:
+Build the first no-code dashboard surface on top of the gateway:
 
-- add background queue execution
-- add cancellation/retry support
-- stream run events
-- connect gateway state to future UI
-- keep write actions behind approval and policy gates
+- connect project and run state to UI workflows
+- stream run status/events into the UI
+- review and trigger approve/apply flows from UI
+- keep write actions approval-gated and policy-checked

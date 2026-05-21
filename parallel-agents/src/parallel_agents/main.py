@@ -1454,7 +1454,12 @@ def gateway_group() -> None:
 @click.option("--host", default="127.0.0.1", show_default=True, help="Host address to bind.")
 @click.option("--port", default=8733, type=int, show_default=True, help="Port to bind.")
 @click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Gateway state and artifact directory.")
-def gateway_start(host: str, port: int, output_dir: str) -> None:
+@click.option(
+    "--api-key",
+    default=None,
+    help="Optional gateway API key. If omitted, PA_GATEWAY_API_KEY from env is used.",
+)
+def gateway_start(host: str, port: int, output_dir: str, api_key: str | None) -> None:
     """Start the local gateway HTTP server."""
     try:
         from parallel_agents.gateway import run_gateway_server
@@ -1463,7 +1468,7 @@ def gateway_start(host: str, port: int, output_dir: str) -> None:
         sys.exit(EXIT_RUNTIME_FAILURE)
 
     try:
-        run_gateway_server(host=host, port=port, output_dir=output_dir)
+        run_gateway_server(host=host, port=port, output_dir=output_dir, api_key=api_key)
     except Exception as exc:
         click.echo(f"Failed to start gateway: {exc}", err=True)
         sys.exit(EXIT_RUNTIME_FAILURE)

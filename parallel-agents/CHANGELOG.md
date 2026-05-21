@@ -6,6 +6,23 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+- Gateway queue hardening:
+  - run listing endpoint (`GET /runs`)
+  - per-run job inspection endpoint (`GET /runs/{run_id}/jobs`)
+  - cancel endpoint (`POST /runs/{run_id}/cancel`)
+  - retry endpoint (`POST /runs/{run_id}/retry`)
+  - incremental run lifecycle events for queue execution
+- Optional gateway API-key auth for non-local usage:
+  - `PA_GATEWAY_API_KEY` environment support
+  - `parallel-agents gateway start --api-key ...`
+  - header auth via `X-PA-API-Key` or `Authorization: Bearer ...`
+- New gateway workflow doc: `docs/workflows/gateway-api.md`
+
+### Changed
+- README now documents gateway endpoints, queue behavior, and auth usage.
+- Roadmap and project status updated to reflect Phase 3 progress.
+
 ## [0.4.2] - 2026-05-21
 
 ### Added
