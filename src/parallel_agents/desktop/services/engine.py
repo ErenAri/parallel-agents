@@ -290,6 +290,21 @@ class EngineService:
     def artifact_names_for_run(self, run_id: str) -> set[str]:
         return {p.stem for p in self.list_artifacts(run_id) if p.suffix == ".json" and p.stem != "index"}
 
+    def roadmap_milestones(self, run_id: str | None) -> list[str]:
+        """Ordered unique milestones from a run's roadmap artifact, or []."""
+        if run_id is None:
+            return []
+        try:
+            roadmap = self._load_artifact(run_id, "roadmap", RoadmapPlan)
+        except FileNotFoundError:
+            return []
+        seen: list[str] = []
+        for item in roadmap.items:
+            ms = (item.milestone or "").strip()
+            if ms and ms not in seen:
+                seen.append(ms)
+        return seen
+
     def _load_brief(self, run_id: str) -> ProductBrief:
         return self._load_artifact(run_id, "brief", ProductBrief)
 

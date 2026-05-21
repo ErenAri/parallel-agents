@@ -25,5 +25,5 @@ class Page(QWidget):
         self.body = QWidget()
         self.body_layout = QVBoxLayout(self.body)
         self.body_layout.setContentsMargins(32, 8, 32, 24)
-        self.body_layout.setSpacing(16)
+        self.body_layout.setSpacing(12)
         self._outer.addWidget(self.body, stretch=1)

@@ -27,6 +27,7 @@ try:
     from PySide6.QtWidgets import (  # noqa: F401
         QApplication,
         QCheckBox,
+        QComboBox,
         QFileDialog,
         QFormLayout,
         QFrame,

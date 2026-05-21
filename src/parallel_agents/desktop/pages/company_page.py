@@ -4,6 +4,7 @@ from pathlib import Path
 
 from parallel_agents.desktop._qt import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -18,7 +19,18 @@ from parallel_agents.desktop._qt import (
 )
 from parallel_agents.desktop.pages._base import Page
 from parallel_agents.desktop.services.engine import EngineService
+from parallel_agents.desktop.services.history import HistoryStore
 from parallel_agents.desktop.services.workers import AsyncJob
+
+
+def _editable_combo(items: list[str], placeholder: str) -> QComboBox:
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    combo.addItems(items)
+    combo.setCurrentText("")
+    combo.lineEdit().setPlaceholderText(placeholder)
+    return combo
 
 
 class _StepCard(QFrame):
@@ -27,21 +39,22 @@ class _StepCard(QFrame):
         self.setObjectName("Card")
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(18, 14, 18, 14)
-        outer.setSpacing(6)
+        outer.setContentsMargins(16, 12, 16, 12)
+        outer.setSpacing(8)
 
         header = QHBoxLayout()
+        header.setSpacing(8)
         self.title = QLabel(name)
-        self.title.setStyleSheet("font-size: 15px; font-weight: 600;")
+        self.title.setStyleSheet("font-size: 15px; font-weight: 600; color: #f0f2f7;")
         header.addWidget(self.title)
         header.addStretch(1)
-        self.status = QLabel("not started")
+        self.status = QLabel("idle")
         self.status.setObjectName("WorkerStatusIdle")
         header.addWidget(self.status)
         outer.addLayout(header)
 
         self.description = QLabel(description)
-        self.description.setStyleSheet("color: #8a90a2;")
+        self.description.setStyleSheet("color: #8a90a2; font-size: 13px;")
         self.description.setWordWrap(True)
         outer.addWidget(self.description)
 
@@ -71,6 +84,7 @@ class CompanyPage(Page):
             subtitle="Walk an idea through brief, PR/FAQ, tech stack, RFC, roadmap, sprint, and a gated GitHub apply.",
         )
         self.engine = engine
+        self.history = HistoryStore()
         self._job: AsyncJob | None = None
         self._run_id: str | None = None
 
@@ -123,8 +137,10 @@ class CompanyPage(Page):
             "Recommend Stack", self._generate_stack,
             enabled=False,
         )
-        self.repo_path_input = QLineEdit()
-        self.repo_path_input.setPlaceholderText("Path to repo for tech-stack signal detection")
+        self.repo_path_input = _editable_combo(
+            self.history.get("repo_path"),
+            placeholder="Path to repo for tech-stack signal detection",
+        )
         self.stack_card.extra_row.addWidget(QLabel("Repo:"))
         self.stack_card.extra_row.addWidget(self.repo_path_input, stretch=1)
 
@@ -148,8 +164,10 @@ class CompanyPage(Page):
             "Plan Sprint", self._generate_sprint,
             enabled=False,
         )
-        self.milestone_input = QLineEdit()
-        self.milestone_input.setPlaceholderText("Milestone (e.g. M1)")
+        self.milestone_input = QComboBox()
+        self.milestone_input.setEditable(True)
+        self.milestone_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.milestone_input.lineEdit().setPlaceholderText("Milestone (populated from roadmap)")
         self.sprint_card.extra_row.addWidget(QLabel("Milestone:"))
         self.sprint_card.extra_row.addWidget(self.milestone_input, stretch=1)
 
@@ -159,8 +177,10 @@ class CompanyPage(Page):
             "Build Issue Plan", self._generate_issue_plan,
             enabled=False,
         )
-        self.repo_ref_input = QLineEdit()
-        self.repo_ref_input.setPlaceholderText("owner/repo")
+        self.repo_ref_input = _editable_combo(
+            self.history.get("repo_ref"),
+            placeholder="owner/repo",
+        )
         self.issue_plan_card.extra_row.addWidget(QLabel("Repo ref:"))
         self.issue_plan_card.extra_row.addWidget(self.repo_ref_input, stretch=1)
 
@@ -215,13 +235,19 @@ class CompanyPage(Page):
     def _generate_stack(self) -> None:
         if not self._require_run("tech stack"):
             return
-        repo = self.repo_path_input.text().strip()
+        repo = self.repo_path_input.currentText().strip()
         if not repo:
             QMessageBox.warning(self, "Repo path", "Enter a path to the repo for tech-stack analysis.")
             return
         rid = self._run_id
-        self._run_step(self.stack_card, lambda: self.engine.create_tech_stack(rid, repo),
-                       after=lambda r: self._on_artifact_done(self.stack_card, r))
+        self._run_step(
+            self.stack_card,
+            lambda: self.engine.create_tech_stack(rid, repo),
+            after=lambda r: self._on_artifact_done_history(
+                self.stack_card, r, history_key="repo_path", history_value=repo,
+                history_combo=self.repo_path_input,
+            ),
+        )
 
     def _generate_rfc(self) -> None:
         if not self._require_run("RFC"):
@@ -240,9 +266,9 @@ class CompanyPage(Page):
     def _generate_sprint(self) -> None:
         if not self._require_run("Sprint"):
             return
-        milestone = self.milestone_input.text().strip()
+        milestone = self.milestone_input.currentText().strip()
         if not milestone:
-            QMessageBox.warning(self, "Milestone", "Enter a milestone (e.g. M1).")
+            QMessageBox.warning(self, "Milestone", "Pick or enter a milestone (e.g. M1).")
             return
         rid = self._run_id
         self._run_step(self.sprint_card, lambda: self.engine.create_sprint(rid, milestone),
@@ -251,13 +277,19 @@ class CompanyPage(Page):
     def _generate_issue_plan(self) -> None:
         if not self._require_run("Issue plan"):
             return
-        repo = self.repo_ref_input.text().strip()
+        repo = self.repo_ref_input.currentText().strip()
         if not repo or "/" not in repo:
             QMessageBox.warning(self, "Repo ref", "Enter owner/repo (e.g. acme/parallel-agents).")
             return
         rid = self._run_id
-        self._run_step(self.issue_plan_card, lambda: self.engine.create_issue_plan(rid, repo),
-                       after=lambda r: self._on_artifact_done(self.issue_plan_card, r))
+        self._run_step(
+            self.issue_plan_card,
+            lambda: self.engine.create_issue_plan(rid, repo),
+            after=lambda r: self._on_artifact_done_history(
+                self.issue_plan_card, r, history_key="repo_ref", history_value=repo,
+                history_combo=self.repo_ref_input,
+            ),
+        )
 
     def _apply_plan(self) -> None:
         if not self._require_run("Apply"):
@@ -320,6 +352,26 @@ class CompanyPage(Page):
         card.button.setEnabled(True)
         self.artifact_created.emit(result.run_id, result.artifact_path)
         self._refresh_state()
+
+    def _on_artifact_done_history(
+        self,
+        card,
+        result,
+        *,
+        history_key: str,
+        history_value: str,
+        history_combo: QComboBox,
+    ) -> None:
+        # only record on success; we're inside `after` so this fired
+        self.history.add(history_key, history_value)
+        # repopulate the combo's drop-down list with the fresh history
+        current = history_combo.currentText()
+        history_combo.blockSignals(True)
+        history_combo.clear()
+        history_combo.addItems(self.history.get(history_key))
+        history_combo.setCurrentText(current)
+        history_combo.blockSignals(False)
+        self._on_artifact_done(card, result)
 
     def _on_apply_done(self, result) -> None:
         self.apply_card.set_status("done", "WorkerStatusDone")
@@ -387,6 +439,19 @@ class CompanyPage(Page):
         self.roadmap_card.button.setEnabled(brief_done)
         self.sprint_card.button.setEnabled(roadmap_done)
         self.issue_plan_card.button.setEnabled(roadmap_done)
+
+        # repopulate milestone combo whenever roadmap state changes
+        if roadmap_done:
+            milestones = self.engine.roadmap_milestones(self._run_id)
+            current = self.milestone_input.currentText()
+            self.milestone_input.blockSignals(True)
+            self.milestone_input.clear()
+            self.milestone_input.addItems(milestones)
+            if current:
+                self.milestone_input.setCurrentText(current)
+            elif milestones:
+                self.milestone_input.setCurrentIndex(0)
+            self.milestone_input.blockSignals(False)
 
         # apply is gated on a literal approved status, not just artifact presence
         plan_approval_ok = False
