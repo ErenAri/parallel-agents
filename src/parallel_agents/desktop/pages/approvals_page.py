@@ -76,7 +76,18 @@ class ApprovalsPage(Page):
 
     def _refresh(self) -> None:
         self.list.clear()
-        for entry in self.engine.list_pending_approvals():
+        if self.engine.current_project() is None:
+            item = QListWidgetItem("Open a project to see approvals")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            self.list.addItem(item)
+            return
+        pending = self.engine.list_pending_approvals()
+        if not pending:
+            item = QListWidgetItem("No pending approvals")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            self.list.addItem(item)
+            return
+        for entry in pending:
             data = entry["data"]
             path = entry["path"]
             label = data.get("title") or data.get("run_id") or path.name
@@ -100,6 +111,8 @@ class ApprovalsPage(Page):
         return self.approver_input.text().strip() or "unknown"
 
     def _approve(self) -> None:
+        from parallel_agents.desktop.widgets.error_dialog import show_error
+
         entry = self._selected_entry()
         if entry is None:
             QMessageBox.information(self, "No selection", "Select a pending approval first.")
@@ -110,11 +123,13 @@ class ApprovalsPage(Page):
         try:
             self.engine.approve(entry["path"], approver=self._approver(), note=note)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Approve failed", str(exc))
+            show_error(self, "Approve failed", str(exc), details=repr(exc))
             return
         self._refresh()
 
     def _reject(self) -> None:
+        from parallel_agents.desktop.widgets.error_dialog import show_error
+
         entry = self._selected_entry()
         if entry is None:
             QMessageBox.information(self, "No selection", "Select a pending approval first.")
@@ -125,6 +140,6 @@ class ApprovalsPage(Page):
         try:
             self.engine.reject(entry["path"], approver=self._approver(), reason=reason)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Reject failed", str(exc))
+            show_error(self, "Reject failed", str(exc), details=repr(exc))
             return
         self._refresh()

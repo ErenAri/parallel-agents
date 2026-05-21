@@ -77,13 +77,25 @@ class EngineService:
         if not (office_dir(root) / "project.json").exists():
             init_project_office(root, name=root.name)
         self._current_project = root
+        self._reload_settings()
         return self._load_project_info(root)
 
     def init_project(self, path: str | Path, name: str | None = None) -> ProjectInfo:
         root = resolve_project_root(path)
         init_project_office(root, name=name)
         self._current_project = root
+        self._reload_settings()
         return self._load_project_info(root)
+
+    def _reload_settings(self) -> None:
+        from parallel_agents.desktop.services.settings_store import SettingsStore
+
+        SettingsStore(self._current_project).load()
+
+    def settings_store(self):
+        from parallel_agents.desktop.services.settings_store import SettingsStore
+
+        return SettingsStore(self._current_project)
 
     def current_project(self) -> ProjectInfo | None:
         if self._current_project is None:

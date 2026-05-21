@@ -14,12 +14,15 @@ from parallel_agents.desktop._qt import (
     QPushButton,
     QVBoxLayout,
     Qt,
+    Signal,
 )
 from parallel_agents.desktop.pages._base import Page
 from parallel_agents.desktop.services.engine import EngineService
 
 
 class ProjectsPage(Page):
+    project_opened = Signal(object)
+
     def __init__(self, engine: EngineService) -> None:
         super().__init__(
             title="Projects",
@@ -92,3 +95,4 @@ class ProjectsPage(Page):
             item = QListWidgetItem(f"{run['id']}   {run.get('created_at', '')}")
             item.setData(Qt.ItemDataRole.UserRole, run["id"])
             self.recent_list.addItem(item)
+        self.project_opened.emit(info)

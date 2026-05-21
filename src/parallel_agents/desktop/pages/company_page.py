@@ -339,9 +339,16 @@ class CompanyPage(Page):
         self._refresh_state()
 
     def _on_failed(self, card, error: str) -> None:
+        from parallel_agents.desktop.widgets.error_dialog import show_error
+
         card.set_status("error", "WorkerStatusError")
         card.button.setEnabled(True)
-        QMessageBox.critical(self, "Step failed", error)
+        show_error(
+            self,
+            "Step failed",
+            "The step could not complete. See details for the full error.",
+            details=error,
+        )
 
     def _refresh_state(self) -> None:
         if self.engine.current_project() is None:
