@@ -50,10 +50,15 @@ class ArtifactsPage(Page):
 
         self._refresh()
 
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        self._refresh()
+
     def _refresh(self) -> None:
         self.tree.clear()
         if self.engine.current_project() is None:
-            QTreeWidgetItem(self.tree, ["(open a project first)"])
+            placeholder = QTreeWidgetItem(self.tree, ["Open a project to see artifacts"])
+            placeholder.setDisabled(True)
             return
         for run in self.engine.list_runs():
             run_id = run["id"]

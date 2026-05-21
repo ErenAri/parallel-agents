@@ -49,6 +49,8 @@ try:
         QSplitter,
         QStackedWidget,
         QStatusBar,
+        QDialog,
+        QDialogButtonBox,
         QStyle,
         QTabWidget,
         QTextBrowser,
