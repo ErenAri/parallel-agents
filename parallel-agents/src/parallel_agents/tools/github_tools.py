@@ -26,6 +26,14 @@ class GitHubIssue:
     comments: list[dict[str, str]]
 
 
+@dataclass
+class GitHubMilestone:
+    title: str
+    number: int | None = None
+    state: str = "open"
+    url: str = ""
+
+
 def parse_github_url(url: str) -> tuple[str, str, int] | None:
     """Parse a GitHub issue URL into (owner, repo, issue_number)."""
     match = re.match(
@@ -33,6 +41,22 @@ def parse_github_url(url: str) -> tuple[str, str, int] | None:
     )
     if match:
         return match.group(1), match.group(2), int(match.group(3))
+    return None
+
+
+def parse_repo_ref(ref: str) -> tuple[str, str] | None:
+    """Parse owner/repo or GitHub URL into (owner, repo)."""
+    normalized = ref.strip()
+    if not normalized:
+        return None
+
+    slug_match = re.fullmatch(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", normalized)
+    if slug_match:
+        return slug_match.group(1), slug_match.group(2)
+
+    url_match = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?", normalized)
+    if url_match:
+        return url_match.group(1), url_match.group(2)
     return None
 
 
@@ -138,6 +162,124 @@ async def create_pr(
     if rc == 0:
         return stdout.strip()
     return None
+
+
+async def list_milestones(owner: str, repo: str, state: str = "all") -> list[GitHubMilestone]:
+    """List repository milestones via gh api."""
+    if not _gh_available():
+        logger.warning("gh CLI not found. Cannot list milestones.")
+        return []
+
+    stdout, rc = await _run_gh(
+        "api",
+        f"repos/{owner}/{repo}/milestones",
+        "-f",
+        f"state={state}",
+    )
+    if rc != 0:
+        return []
+
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+    milestones: list[GitHubMilestone] = []
+    for item in payload:
+        milestones.append(
+            GitHubMilestone(
+                title=item.get("title", ""),
+                number=item.get("number"),
+                state=item.get("state", "open"),
+                url=item.get("html_url", ""),
+            )
+        )
+    return milestones
+
+
+async def create_milestone(
+    owner: str,
+    repo: str,
+    title: str,
+    description: str = "",
+) -> GitHubMilestone | None:
+    """Create a repository milestone via gh api."""
+    if not _gh_available():
+        logger.warning("gh CLI not found. Cannot create milestone.")
+        return None
+
+    args = [
+        "api",
+        "--method",
+        "POST",
+        f"repos/{owner}/{repo}/milestones",
+        "-f",
+        f"title={title}",
+    ]
+    if description:
+        args.extend(["-f", f"description={description}"])
+
+    stdout, rc = await _run_gh(*args)
+    if rc != 0:
+        return None
+
+    try:
+        payload = json.loads(stdout)
+        return GitHubMilestone(
+            title=payload.get("title", title),
+            number=payload.get("number"),
+            state=payload.get("state", "open"),
+            url=payload.get("html_url", ""),
+        )
+    except json.JSONDecodeError:
+        return GitHubMilestone(title=title)
+
+
+async def ensure_milestone(
+    owner: str,
+    repo: str,
+    title: str,
+    description: str = "",
+) -> GitHubMilestone | None:
+    """Ensure a milestone exists by title, creating one if needed."""
+    if not title.strip():
+        return None
+
+    existing = await list_milestones(owner, repo, state="all")
+    for milestone in existing:
+        if milestone.title.strip().lower() == title.strip().lower():
+            return milestone
+    return await create_milestone(owner, repo, title=title, description=description)
+
+
+async def create_issue(
+    owner: str,
+    repo: str,
+    title: str,
+    body: str,
+    *,
+    milestone: str | None = None,
+    labels: list[str] | None = None,
+) -> str | None:
+    """Create a GitHub issue via gh CLI and return created URL when available."""
+    if not _gh_available():
+        logger.warning("gh CLI not found. Cannot create issue.")
+        return None
+
+    args: list[str] = [
+        "issue", "create",
+        "--repo", f"{owner}/{repo}",
+        "--title", title,
+        "--body", body,
+    ]
+    if milestone:
+        args.extend(["--milestone", milestone])
+    if labels:
+        args.extend(["--label", ",".join(labels)])
+
+    stdout, rc = await _run_gh(*args)
+    if rc != 0:
+        return None
+    return stdout.strip() or None
 
 
 async def list_repo_files(repo_path: str, pattern: str = "*") -> list[str]:

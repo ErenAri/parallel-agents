@@ -1,1 +1,10 @@
 /.claude
+
+# Local run/cache artifacts
+/.parallel-agents-output/
+/.ruff_cache/
+
+# Project-local tool configs and caches
+/parallel-agents/.mcp.json
+/parallel-agents/.parallel-agents-output/
+/parallel-agents/.ruff_cache/

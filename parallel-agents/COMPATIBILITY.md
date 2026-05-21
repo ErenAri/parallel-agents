@@ -12,8 +12,26 @@ The following are compatibility-sensitive once `1.0.0` is released:
   - `show`
   - `history`
   - `init`
+  - `eval run`
+  - `eval score`
+  - `gateway start`
   - `mcp`
   - `mcp-install`
+  - `company idea`
+  - `company prfaq`
+  - `company stack`
+  - `company rfc`
+  - `company roadmap`
+  - `company sprint`
+  - `company release-check`
+  - `company post-release`
+  - `company plan`
+  - `company approve`
+  - `company apply`
+  - `company templates`
+  - `company branch-name`
+  - `company pr-summary`
+  - `company artifacts`
 - MCP tool names:
   - `review`
   - `security_scan`
@@ -22,6 +40,8 @@ The following are compatibility-sensitive once `1.0.0` is released:
   - `code_review`
   - `analyze`
   - `list_workers`
+  - company workflow tools
+  - evaluation scoring tool
 - Core Python API exports from `parallel_agents.__init__`:
   - `Pipeline`
   - `PipelineConfig`

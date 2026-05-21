@@ -1,0 +1,22 @@
+{
+  "name": "benchmark-v1",
+  "baseline_acceptance_rate": 0.62,
+  "baseline_regression_rate": 0.08,
+  "cases": [
+    {
+      "id": "auth-001",
+      "task": "Review and harden authentication middleware for bypass risks",
+      "repo_path": "./repos/service-a",
+      "baseline_human_minutes": 120,
+      "tags": ["security", "auth"]
+    },
+    {
+      "id": "perf-002",
+      "task": "Identify and fix N+1 query patterns in order listing API",
+      "repo_path": "./repos/service-b",
+      "baseline_human_minutes": 90,
+      "tags": ["performance", "database"]
+    }
+  ]
+}
+

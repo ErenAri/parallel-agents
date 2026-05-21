@@ -4,6 +4,19 @@ A parallel multi-agent pipeline for code analysis and transformation, powered by
 
 Fan out code analysis to 8 specialist AI agents running concurrently, then merge results into a unified report with patches, risk assessments, and PR summaries.
 
+## Product Direction
+
+`parallel-agents` is the execution engine for **Parallel Agents Office**: a no-code AI software company workflow that can take a project from idea to release.
+
+The long-term product goal is to coordinate specialist agents across the full software lifecycle:
+
+```text
+Idea -> PR/FAQ -> Tech stack decision -> Architecture RFC -> Roadmap
+     -> Sprint -> Implementation -> Review -> Release -> Learning
+```
+
+The current package focuses on the engine: CLI, MCP server, specialist workers, evidence storage, patch generation, and evaluation metrics. The next product layer will add company workflow models, GitHub-first project management, a gateway/job system, and a no-code dashboard.
+
 ## Architecture
 
 ```text
@@ -69,6 +82,33 @@ parallel-agents run --store sqlite --repo ./project "Add input validation"
 # Output as JSON or patch
 parallel-agents run --output json --repo ./project "Fix bugs"
 parallel-agents run --output patch --repo ./project "Fix bugs" > fix.patch
+
+# Run a benchmark dataset
+parallel-agents eval run --dataset examples/eval_dataset.json --repo-root .
+parallel-agents eval score --results eval/results.json --output-report eval/report.md --output-json eval/score.json
+
+# Build company workflow artifacts
+parallel-agents company idea "Build a no-code repo quality office" --output company/brief.json
+parallel-agents company stack --repo ./my-project --output company/stack.json
+parallel-agents company roadmap --brief company/brief.json --output company/roadmap.json
+parallel-agents company sprint --roadmap company/roadmap.json --milestone M1 --output company/sprint.json
+parallel-agents company plan --roadmap company/roadmap.json --repo owner/repo --dry-run --output company/issue-plan.json
+parallel-agents company release-check --repo ./my-project --output company/release-check.json
+parallel-agents company post-release --release-id v0.4.2 --release-check company/release-check.json --output company/post-release.json
+parallel-agents company templates --roadmap company/roadmap.json --output company/templates.json
+parallel-agents company branch-name --issue RM-01 --title "Define product and workflow artifacts"
+parallel-agents company artifacts --run-id run-123
+
+# Team-gated write flow (approval required before GitHub issue creation)
+parallel-agents company plan --roadmap company/roadmap.json --repo owner/repo --no-dry-run --permission-profile team --run-id run-123
+parallel-agents company approve --run-id run-123 --approver engineering-lead --approval-note "Reviewed and approved for sprint kickoff"
+parallel-agents company apply --run-id run-123
+
+# Optional explicit policy override at apply time
+parallel-agents company apply --run-id run-123 --policy-file company/apply-policy.json
+
+# Local gateway for future no-code surfaces
+parallel-agents gateway start --host 127.0.0.1 --port 8733
 ```
 
 ## CLI Commands
@@ -80,6 +120,9 @@ parallel-agents run --output patch --repo ./project "Fix bugs" > fix.patch
 | `parallel-agents show <run-id>` | View results of a previous run |
 | `parallel-agents history` | List all previous runs |
 | `parallel-agents init` | Generate default configuration |
+| `parallel-agents company ...` | Generate company workflow artifacts (brief, stack, RFC, roadmap, issue plan, release checks) |
+| `parallel-agents eval run/score` | Run and score productivity/effectiveness benchmarks |
+| `parallel-agents gateway start` | Start the local project/run/job API |
 
 ### Run Options
 
@@ -157,15 +200,65 @@ export PA_STORE_BACKEND=sqlite
 - Parallel specialist analysis with a single merged result.
 - CLI, MCP server, PyPI package, npm wrapper, and release workflows.
 - Evidence storage for run history (`file` or `sqlite`).
+- Company workflow artifacts from idea intake through post-release review.
+- Approval-gated GitHub issue planning with apply-time policy checks.
+- Optional local gateway for persistent project/run state.
 
 ## Current Limitations
 
 - Generated patches should be reviewed before applying.
 - GitHub issue mode requires `gh` installation and authentication.
 - Output quality still depends on model behavior and repository context quality.
+- Gateway is local-only and intentionally binds to localhost by default.
+
+## Evaluation Harness
+
+Use the built-in evaluation flow to measure productivity and effectiveness over a fixed benchmark set.
+
+1. Create or edit a dataset JSON (see `examples/eval_dataset.json`).
+2. Run benchmark execution:
+
+```bash
+parallel-agents eval run \
+  --dataset examples/eval_dataset.json \
+  --repo-root . \
+  --output eval/results.json
+```
+
+3. Fill manual annotation fields in `eval/results.json` per case:
+   - `accepted_without_major_edits`
+   - `introduced_regression`
+   - `findings_true_positives`
+   - `findings_false_positives`
+   - `reviewer_minutes`
+4. Compute score and report:
+
+```bash
+parallel-agents eval score \
+  --results eval/results.json \
+  --output-json eval/score.json \
+  --output-report eval/report.md
+```
+
+Scoring includes:
+- speed gain vs baseline human minutes
+- acceptance rate and gain vs baseline
+- regression rate and increase vs baseline
+- finding precision
+- weighted delivery impact score:
+  `0.4*speed_gain + 0.4*acceptance_gain - 0.2*regression_increase`
 
 ## Project Docs
 
+- [VISION.md](VISION.md)
+- [PRFAQ.md](PRFAQ.md)
+- [PROJECT_STATUS.md](PROJECT_STATUS.md)
+- [OPERATING_MODEL.md](OPERATING_MODEL.md)
+- [QUALITY_BAR.md](QUALITY_BAR.md)
+- [TECH_STACK_POLICY.md](TECH_STACK_POLICY.md)
+- [ROADMAP.md](ROADMAP.md)
+- [docs/workflows/idea-to-release.md](docs/workflows/idea-to-release.md)
+- [docs/workflows/agent-roles.md](docs/workflows/agent-roles.md)
 - [CHANGELOG.md](CHANGELOG.md)
 - [COMPATIBILITY.md](COMPATIBILITY.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)

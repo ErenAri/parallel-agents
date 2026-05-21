@@ -1,0 +1,15 @@
+{
+  "name": "local-smoke-benchmark",
+  "baseline_acceptance_rate": 0.5,
+  "baseline_regression_rate": 0.1,
+  "cases": [
+    {
+      "id": "pa-self-001",
+      "task": "Review the CLI command flow for reliability and edge-case failure handling. Suggest safe patch-level improvements.",
+      "repo_path": ".",
+      "baseline_human_minutes": 75,
+      "tags": ["reliability", "cli"]
+    }
+  ]
+}
+
