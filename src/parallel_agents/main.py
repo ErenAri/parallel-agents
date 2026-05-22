@@ -69,8 +69,6 @@ from parallel_agents.tools.github_apply import (
     issue_field as _issue_field,
 )
 from parallel_agents.tools.github_tools import (
-    create_issue,
-    ensure_milestone,
     parse_repo_ref,
 )
 

@@ -18,7 +18,6 @@ from parallel_agents.company_artifacts import (
     persist_company_artifact,
 )
 from parallel_agents.company_workflows import (
-    PlannedIssue,
     ProductBrief,
     RoadmapPlan,
     TechStackDecision,

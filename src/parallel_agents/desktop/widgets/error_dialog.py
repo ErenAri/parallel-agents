@@ -10,7 +10,6 @@ from parallel_agents.desktop._qt import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
-    Qt,
     QVBoxLayout,
 )
 
