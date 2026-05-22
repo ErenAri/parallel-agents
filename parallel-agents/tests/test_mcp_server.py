@@ -47,6 +47,22 @@ async def test_list_workers():
         assert "model" in w
 
 
+@pytest.mark.asyncio
+async def test_tool_discovery_lists_read_and_write_tools():
+    from parallel_agents.mcp_server import tool_discovery
+
+    payload = json.loads(await tool_discovery())
+    assert payload["count"] >= 1
+    names = {entry["name"] for entry in payload["tools"]}
+    assert "review" in names
+    assert "company_apply" in names
+    assert payload["write_count"] >= 1
+
+    read_only = json.loads(await tool_discovery(include_write=False))
+    assert all(entry["access"] == "read" for entry in read_only["tools"])
+    assert read_only["write_count"] == 0
+
+
 # ---------------------------------------------------------------------------
 # run_single_worker tests
 # ---------------------------------------------------------------------------

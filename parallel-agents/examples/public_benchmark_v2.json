@@ -1,0 +1,103 @@
+{
+  "name": "public-benchmark-v2",
+  "baseline_acceptance_rate": 0.62,
+  "baseline_regression_rate": 0.09,
+  "cases": [
+    {
+      "id": "SEC-001",
+      "task": "Review authentication and session middleware for vulnerabilities.",
+      "repo_path": ".",
+      "baseline_human_minutes": 90,
+      "tags": ["security", "middleware"],
+      "notes": "Focus on missing validation and secret handling."
+    },
+    {
+      "id": "SEC-002",
+      "task": "Audit dependency and secrets handling in CI and deployment config.",
+      "repo_path": ".",
+      "baseline_human_minutes": 85,
+      "tags": ["security", "devops"],
+      "notes": "Prioritize exposed credentials and supply-chain risks."
+    },
+    {
+      "id": "TEST-001",
+      "task": "Identify missing high-value tests for API error handling and edge cases.",
+      "repo_path": ".",
+      "baseline_human_minutes": 75,
+      "tags": ["testing", "quality"],
+      "notes": "Prefer concrete test recommendations with coverage impact."
+    },
+    {
+      "id": "TEST-002",
+      "task": "Evaluate flaky test patterns and isolation gaps in integration tests.",
+      "repo_path": ".",
+      "baseline_human_minutes": 70,
+      "tags": ["testing", "reliability"],
+      "notes": "Include deterministic fixture and timing recommendations."
+    },
+    {
+      "id": "PERF-001",
+      "task": "Find top performance bottlenecks and propose practical fixes.",
+      "repo_path": ".",
+      "baseline_human_minutes": 80,
+      "tags": ["performance", "profiling"],
+      "notes": "Prioritize issues with user-facing latency impact."
+    },
+    {
+      "id": "PERF-002",
+      "task": "Analyze caching strategy and repeated query hotspots in service layer.",
+      "repo_path": ".",
+      "baseline_human_minutes": 78,
+      "tags": ["performance", "backend"],
+      "notes": "Quantify expected improvement and risk."
+    },
+    {
+      "id": "DX-001",
+      "task": "Review CI workflow reliability and identify flaky or slow steps.",
+      "repo_path": ".",
+      "baseline_human_minutes": 60,
+      "tags": ["devops", "ci"],
+      "notes": "Recommend changes with clear trade-offs."
+    },
+    {
+      "id": "DX-002",
+      "task": "Review local developer setup scripts for friction and failure points.",
+      "repo_path": ".",
+      "baseline_human_minutes": 55,
+      "tags": ["devops", "developer-experience"],
+      "notes": "Highlight reproducibility and onboarding impact."
+    },
+    {
+      "id": "ARCH-001",
+      "task": "Review architecture boundaries and coupling risks across modules.",
+      "repo_path": ".",
+      "baseline_human_minutes": 95,
+      "tags": ["architecture", "maintainability"],
+      "notes": "Suggest bounded-context and dependency direction improvements."
+    },
+    {
+      "id": "ARCH-002",
+      "task": "Assess resilience patterns for retries, timeouts, and fallback behavior.",
+      "repo_path": ".",
+      "baseline_human_minutes": 88,
+      "tags": ["architecture", "reliability"],
+      "notes": "Focus on failure-mode handling and blast-radius reduction."
+    },
+    {
+      "id": "DOCS-001",
+      "task": "Review product and developer docs for onboarding gaps and ambiguity.",
+      "repo_path": ".",
+      "baseline_human_minutes": 50,
+      "tags": ["documentation", "onboarding"],
+      "notes": "Identify missing setup paths and outdated command references."
+    },
+    {
+      "id": "REVIEW-001",
+      "task": "Perform a release-readiness review for risky changes and mitigation coverage.",
+      "repo_path": ".",
+      "baseline_human_minutes": 92,
+      "tags": ["review", "release"],
+      "notes": "Focus on rollback readiness, telemetry, and test confidence."
+    }
+  ]
+}

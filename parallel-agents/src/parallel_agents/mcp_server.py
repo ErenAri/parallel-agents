@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -67,6 +68,47 @@ mcp = FastMCP(
         "Fans out to specialist AI agents running concurrently, then synthesizes results."
     ),
 )
+
+TOOL_CATALOG: list[dict[str, Any]] = [
+    {"name": "review", "access": "read", "approval_required": False},
+    {"name": "security_scan", "access": "read", "approval_required": False},
+    {"name": "test_analysis", "access": "read", "approval_required": False},
+    {"name": "perf_analysis", "access": "read", "approval_required": False},
+    {"name": "code_review", "access": "read", "approval_required": False},
+    {"name": "analyze", "access": "read", "approval_required": False},
+    {"name": "list_workers", "access": "read", "approval_required": False},
+    {"name": "company_idea", "access": "read", "approval_required": False},
+    {"name": "company_stack", "access": "read", "approval_required": False},
+    {"name": "company_roadmap", "access": "read", "approval_required": False},
+    {"name": "company_release_check", "access": "read", "approval_required": False},
+    {"name": "company_plan", "access": "write", "approval_required": True},
+    {"name": "company_approve", "access": "write", "approval_required": True},
+    {"name": "company_apply", "access": "write", "approval_required": True},
+    {"name": "company_artifacts", "access": "read", "approval_required": False},
+    {"name": "company_templates", "access": "read", "approval_required": False},
+    {"name": "eval_score", "access": "read", "approval_required": False},
+]
+
+
+@mcp.tool()
+async def tool_discovery(include_write: bool = True) -> str:
+    """List available MCP tools with access level and approval requirements."""
+    try:
+        tools = TOOL_CATALOG if include_write else [t for t in TOOL_CATALOG if t["access"] == "read"]
+        payload = {
+            "server": "parallel-agents",
+            "tools": tools,
+            "count": len(tools),
+            "read_only_count": sum(1 for tool in tools if tool["access"] == "read"),
+            "write_count": sum(1 for tool in tools if tool["access"] == "write"),
+            "notes": [
+                "Write tools remain approval-gated by default.",
+                "Use company_plan -> company_approve -> company_apply for controlled GitHub writes.",
+            ],
+        }
+        return json.dumps(payload, indent=2, default=str)
+    except Exception as e:
+        return _error_json(e)
 
 
 @mcp.tool()

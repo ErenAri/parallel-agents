@@ -1435,11 +1435,23 @@ def test_company_apply_fails_policy_check_before_writes(tmp_path, monkeypatch):
 def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
-    def fake_run_gateway_server(*, host, port, output_dir, api_key):
+    def fake_run_gateway_server(
+        *,
+        host,
+        port,
+        output_dir,
+        api_key,
+        jwt_secret,
+        jwt_issuer,
+        jwt_audience,
+    ):
         captured["host"] = host
         captured["port"] = port
         captured["output_dir"] = output_dir
         captured["api_key"] = api_key
+        captured["jwt_secret"] = jwt_secret
+        captured["jwt_issuer"] = jwt_issuer
+        captured["jwt_audience"] = jwt_audience
 
     import parallel_agents.gateway as gateway_module
 
@@ -1455,16 +1467,31 @@ def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
     assert captured["port"] == 8733
     assert captured["output_dir"] == str(tmp_path)
     assert captured["api_key"] is None
+    assert captured["jwt_secret"] is None
+    assert captured["jwt_issuer"] is None
+    assert captured["jwt_audience"] is None
 
 
 def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
-    def fake_run_gateway_server(*, host, port, output_dir, api_key):
+    def fake_run_gateway_server(
+        *,
+        host,
+        port,
+        output_dir,
+        api_key,
+        jwt_secret,
+        jwt_issuer,
+        jwt_audience,
+    ):
         captured["host"] = host
         captured["port"] = port
         captured["output_dir"] = output_dir
         captured["api_key"] = api_key
+        captured["jwt_secret"] = jwt_secret
+        captured["jwt_issuer"] = jwt_issuer
+        captured["jwt_audience"] = jwt_audience
 
     import parallel_agents.gateway as gateway_module
 
@@ -1480,6 +1507,54 @@ def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
     assert captured["port"] == 8733
     assert captured["output_dir"] == str(tmp_path)
     assert captured["api_key"] == "secret-token"
+    assert captured["jwt_secret"] is None
+
+
+def test_gateway_start_passes_jwt_options(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def fake_run_gateway_server(
+        *,
+        host,
+        port,
+        output_dir,
+        api_key,
+        jwt_secret,
+        jwt_issuer,
+        jwt_audience,
+    ):
+        captured["host"] = host
+        captured["port"] = port
+        captured["output_dir"] = output_dir
+        captured["api_key"] = api_key
+        captured["jwt_secret"] = jwt_secret
+        captured["jwt_issuer"] = jwt_issuer
+        captured["jwt_audience"] = jwt_audience
+
+    import parallel_agents.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "run_gateway_server", fake_run_gateway_server)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "gateway",
+            "start",
+            "--output-dir",
+            str(tmp_path),
+            "--jwt-secret",
+            "secret",
+            "--jwt-issuer",
+            "issuer",
+            "--jwt-audience",
+            "aud",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["jwt_secret"] == "secret"
+    assert captured["jwt_issuer"] == "issuer"
+    assert captured["jwt_audience"] == "aud"
 
 
 def test_office_init_creates_project_workspace(tmp_path):

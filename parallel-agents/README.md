@@ -130,6 +130,15 @@ parallel-agents gateway start --host 0.0.0.0 --port 8733
 
 # or explicit key via CLI
 parallel-agents gateway start --api-key my-secret
+
+# Optional JWT HS256 protection
+set PA_GATEWAY_JWT_SECRET=replace-with-shared-secret
+set PA_GATEWAY_JWT_ISSUER=parallel-agents
+set PA_GATEWAY_JWT_AUDIENCE=parallel-agents-office
+parallel-agents gateway start --host 0.0.0.0 --port 8733
+
+# or explicit JWT flags via CLI
+parallel-agents gateway start --jwt-secret replace-with-shared-secret --jwt-issuer parallel-agents --jwt-audience parallel-agents-office
 ```
 
 ## CLI Commands
@@ -222,6 +231,15 @@ When `PA_GATEWAY_API_KEY` or `--api-key` is set, requests require either:
 - `X-PA-API-Key: <key>`, or
 - `Authorization: Bearer <key>`
 
+When `PA_GATEWAY_JWT_SECRET` or `--jwt-secret` is set, requests may also use:
+
+- `Authorization: Bearer <jwt>`
+
+Optional issuer/audience constraints:
+
+- `PA_GATEWAY_JWT_ISSUER` or `--jwt-issuer`
+- `PA_GATEWAY_JWT_AUDIENCE` or `--jwt-audience`
+
 `/health` remains readable without auth for liveness checks.
 
 ### Run Options
@@ -303,7 +321,8 @@ export PA_STORE_BACKEND=sqlite
 - Company workflow artifacts from idea intake through post-release review.
 - Approval-gated GitHub issue planning with apply-time policy checks.
 - Local `.parallel-agents/` project workspace for desktop/exe-first usage.
-- Optional local gateway for persistent project/run state.
+- Optional local gateway for persistent project/run state with API key or JWT auth.
+- MCP tool discovery payload (`tool_discovery`) for read/write capability and approval metadata.
 
 ## Current Limitations
 
@@ -318,7 +337,7 @@ export PA_STORE_BACKEND=sqlite
 Use the built-in evaluation flow to measure productivity and effectiveness over a fixed benchmark set.
 
 1. Create or edit a dataset JSON (see `examples/eval_dataset.json`).
-   You can also start from `examples/public_benchmark_v1.json`.
+   You can also start from `examples/public_benchmark_v1.json` or `examples/public_benchmark_v2.json`.
 2. Run benchmark execution:
 
 ```bash

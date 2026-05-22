@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import time
 
 from fastapi.testclient import TestClient
@@ -7,6 +11,22 @@ from fastapi.testclient import TestClient
 from parallel_agents.company_artifacts import load_company_artifact, persist_company_artifact
 from parallel_agents.company_workflows import build_roadmap, create_product_brief
 from parallel_agents.gateway import GatewayStore, create_gateway_app
+
+
+def _jwt_hs256(secret: str, payload: dict) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+
+    def _enc(value: dict) -> str:
+        raw = json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("utf-8")
+
+    encoded_header = _enc(header)
+    encoded_payload = _enc(payload)
+    signing_input = f"{encoded_header}.{encoded_payload}".encode("utf-8")
+    sig = base64.urlsafe_b64encode(
+        hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    ).rstrip(b"=").decode("utf-8")
+    return f"{encoded_header}.{encoded_payload}.{sig}"
 
 
 def _wait_for_status(
@@ -257,6 +277,53 @@ def test_gateway_api_key_auth(monkeypatch, tmp_path):
     )
     assert bearer.status_code == 200
     assert bearer.json()["count"] == 1
+
+
+def test_gateway_jwt_auth_hs256(tmp_path):
+    app = create_gateway_app(
+        tmp_path,
+        jwt_secret="jwt-secret",
+        jwt_issuer="issuer-a",
+        jwt_audience="aud-a",
+    )
+    client = TestClient(app)
+
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["auth_required"] is True
+    assert "jwt_hs256" in health.json().get("auth_modes", [])
+
+    unauthorized = client.post("/projects", json={"name": "Blocked"})
+    assert unauthorized.status_code == 401
+
+    now = time.time()
+    token = _jwt_hs256(
+        "jwt-secret",
+        {
+            "sub": "user-1",
+            "iss": "issuer-a",
+            "aud": "aud-a",
+            "iat": now - 5,
+            "exp": now + 120,
+        },
+    )
+    authorized = client.post(
+        "/projects",
+        json={"name": "Allowed"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert authorized.status_code == 200
+
+    wrong_aud = _jwt_hs256(
+        "jwt-secret",
+        {"sub": "user-1", "iss": "issuer-a", "aud": "wrong", "exp": now + 120},
+    )
+    rejected = client.post(
+        "/projects",
+        json={"name": "Blocked2"},
+        headers={"Authorization": f"Bearer {wrong_aud}"},
+    )
+    assert rejected.status_code == 401
 
 def test_gateway_metrics_summary(tmp_path):
     app = create_gateway_app(tmp_path)

@@ -86,11 +86,12 @@ Completed:
 - Run listing and per-run job inspection endpoints.
 - Incremental run event stream for enqueue/start/status/complete/cancel.
 - Optional API-key protection for non-local gateway exposure.
+- Optional JWT HS256 auth mode with issuer/audience validation for non-local gateway exposure.
 
 Remaining:
 
 - Desktop/exe shell integration.
-- Hosted-grade auth for multi-tenant remote deployments (OAuth/JWT/session model).
+- Hosted-grade auth for multi-tenant remote deployments (OAuth/session model).
 
 ## Phase 4: Local Desktop Office
 
@@ -123,18 +124,21 @@ Remaining:
 
 ## Phase 5: Remote MCP Product Surface
 
-Status: not started.
+Status: partially complete.
 
 Goal: use Parallel Agents Office inside Claude, ChatGPT, Codex, Cursor, and similar tools.
 
-Planned deliverables:
+Completed:
+
+- MCP tool discovery surface (`tool_discovery`) with read/write classification and approval-gate metadata.
+
+Remaining:
 
 - Hosted MCP endpoint.
 - OAuth.
-- Tool discovery.
-- Read-only public tools.
-- Write tools behind approval.
-- Workspace audit trail.
+- Remote public read-only access model.
+- Remote write tools behind approval.
+- Workspace audit trail for hosted traffic.
 
 ## Phase 6: Proof and Evaluation
 
@@ -153,10 +157,11 @@ Completed:
 - `parallel-agents eval breakdown` for cost/time views by project and workflow.
 - Scorecards for speed gain, acceptance rate, regression rate, finding precision, and weighted delivery impact.
 - Starter public benchmark dataset (`examples/public_benchmark_v1.json`).
+- Expanded public benchmark dataset (`examples/public_benchmark_v2.json`).
 
 Remaining:
 
-- Broader public benchmark dataset coverage.
+- Continue broadening benchmark coverage and publish external benchmark baselines.
 - PR acceptance tracking is integrated through `eval sync-pr` and PR link files.
 - Regression tracking from CI outcomes is integrated through `eval sync-ci`.
 - Cost/time views by workflow and project are integrated through `eval breakdown`.

@@ -2306,7 +2306,30 @@ def gateway_group() -> None:
     default=None,
     help="Optional gateway API key. If omitted, PA_GATEWAY_API_KEY from env is used.",
 )
-def gateway_start(host: str, port: int, output_dir: str, api_key: str | None) -> None:
+@click.option(
+    "--jwt-secret",
+    default=None,
+    help="Optional JWT HMAC secret. If omitted, PA_GATEWAY_JWT_SECRET from env is used.",
+)
+@click.option(
+    "--jwt-issuer",
+    default=None,
+    help="Optional JWT issuer constraint (or PA_GATEWAY_JWT_ISSUER).",
+)
+@click.option(
+    "--jwt-audience",
+    default=None,
+    help="Optional JWT audience constraint (or PA_GATEWAY_JWT_AUDIENCE).",
+)
+def gateway_start(
+    host: str,
+    port: int,
+    output_dir: str,
+    api_key: str | None,
+    jwt_secret: str | None,
+    jwt_issuer: str | None,
+    jwt_audience: str | None,
+) -> None:
     """Start the local gateway HTTP server."""
     try:
         from parallel_agents.gateway import run_gateway_server
@@ -2315,7 +2338,15 @@ def gateway_start(host: str, port: int, output_dir: str, api_key: str | None) ->
         sys.exit(EXIT_RUNTIME_FAILURE)
 
     try:
-        run_gateway_server(host=host, port=port, output_dir=output_dir, api_key=api_key)
+        run_gateway_server(
+            host=host,
+            port=port,
+            output_dir=output_dir,
+            api_key=api_key,
+            jwt_secret=jwt_secret,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+        )
     except Exception as exc:
         click.echo(f"Failed to start gateway: {exc}", err=True)
         sys.exit(EXIT_RUNTIME_FAILURE)

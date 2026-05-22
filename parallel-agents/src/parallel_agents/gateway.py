@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import asynccontextmanager
+import hashlib
 import hmac
 import json
 import os
@@ -92,6 +94,98 @@ def _resolve_gateway_api_key(api_key: str | None) -> str | None:
         return None
     cleaned = str(raw).strip()
     return cleaned or None
+
+
+def _resolve_gateway_jwt_secret(jwt_secret: str | None) -> str | None:
+    raw = jwt_secret if jwt_secret is not None else os.getenv("PA_GATEWAY_JWT_SECRET")
+    if raw is None:
+        return None
+    cleaned = str(raw).strip()
+    return cleaned or None
+
+
+def _resolve_gateway_jwt_issuer(jwt_issuer: str | None) -> str | None:
+    raw = jwt_issuer if jwt_issuer is not None else os.getenv("PA_GATEWAY_JWT_ISSUER")
+    if raw is None:
+        return None
+    cleaned = str(raw).strip()
+    return cleaned or None
+
+
+def _resolve_gateway_jwt_audience(jwt_audience: str | None) -> str | None:
+    raw = (
+        jwt_audience if jwt_audience is not None else os.getenv("PA_GATEWAY_JWT_AUDIENCE")
+    )
+    if raw is None:
+        return None
+    cleaned = str(raw).strip()
+    return cleaned or None
+
+
+def _decode_b64url(segment: str) -> bytes:
+    padded = segment + ("=" * (-len(segment) % 4))
+    return base64.urlsafe_b64decode(padded.encode("utf-8"))
+
+
+def _is_valid_hs256_jwt(
+    token: str,
+    *,
+    secret: str,
+    issuer: str | None,
+    audience: str | None,
+) -> bool:
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    encoded_header, encoded_payload, encoded_sig = parts
+    if not encoded_header or not encoded_payload or not encoded_sig:
+        return False
+
+    signing_input = f"{encoded_header}.{encoded_payload}".encode("utf-8")
+    expected_sig = base64.urlsafe_b64encode(
+        hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    ).rstrip(b"=").decode("utf-8")
+    if not hmac.compare_digest(expected_sig, encoded_sig):
+        return False
+
+    try:
+        header = json.loads(_decode_b64url(encoded_header).decode("utf-8"))
+        payload = json.loads(_decode_b64url(encoded_payload).decode("utf-8"))
+    except Exception:
+        return False
+    if not isinstance(header, dict) or not isinstance(payload, dict):
+        return False
+    if str(header.get("alg", "")).upper() != "HS256":
+        return False
+
+    now = time.time()
+    exp = payload.get("exp")
+    if isinstance(exp, (int, float)) and now >= float(exp):
+        return False
+    nbf = payload.get("nbf")
+    if isinstance(nbf, (int, float)) and now < float(nbf):
+        return False
+    iat = payload.get("iat")
+    if isinstance(iat, (int, float)) and now + 300 < float(iat):
+        return False
+
+    if issuer:
+        if str(payload.get("iss", "")).strip() != issuer:
+            return False
+
+    if audience:
+        aud = payload.get("aud")
+        if isinstance(aud, str):
+            if aud != audience:
+                return False
+        elif isinstance(aud, list):
+            aud_values = [str(item) for item in aud]
+            if audience not in aud_values:
+                return False
+        else:
+            return False
+
+    return True
 
 
 class GatewayStore:
@@ -648,6 +742,9 @@ class GatewayJobRunner:
 def create_gateway_app(
     output_dir: str | Path = ".parallel-agents-output",
     api_key: str | None = None,
+    jwt_secret: str | None = None,
+    jwt_issuer: str | None = None,
+    jwt_audience: str | None = None,
 ):
     try:
         from fastapi import FastAPI, HTTPException, Request
@@ -659,6 +756,9 @@ def create_gateway_app(
 
     store = GatewayStore(output_dir)
     resolved_api_key = _resolve_gateway_api_key(api_key)
+    resolved_jwt_secret = _resolve_gateway_jwt_secret(jwt_secret)
+    resolved_jwt_issuer = _resolve_gateway_jwt_issuer(jwt_issuer)
+    resolved_jwt_audience = _resolve_gateway_jwt_audience(jwt_audience)
 
     def _run_company_idea(run: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
         payload = dict(run.get("payload") or {})
@@ -873,31 +973,43 @@ def create_gateway_app(
         lifespan=_lifespan,
     )
 
-    def _request_has_valid_api_key(request: Request) -> bool:
-        if not resolved_api_key:
+    def _request_is_authorized(request: Request) -> bool:
+        if not resolved_api_key and not resolved_jwt_secret:
             return True
 
         direct = request.headers.get("x-pa-api-key")
-        if isinstance(direct, str) and direct and hmac.compare_digest(direct, resolved_api_key):
+        if (
+            resolved_api_key
+            and isinstance(direct, str)
+            and direct
+            and hmac.compare_digest(direct, resolved_api_key)
+        ):
             return True
 
         auth_header = request.headers.get("authorization")
         if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
             token = auth_header[7:].strip()
-            if token and hmac.compare_digest(token, resolved_api_key):
+            if resolved_api_key and token and hmac.compare_digest(token, resolved_api_key):
+                return True
+            if resolved_jwt_secret and token and _is_valid_hs256_jwt(
+                token,
+                secret=resolved_jwt_secret,
+                issuer=resolved_jwt_issuer,
+                audience=resolved_jwt_audience,
+            ):
                 return True
         return False
 
     @app.middleware("http")
     async def _api_key_auth_middleware(request: Request, call_next):
-        if not resolved_api_key:
+        if not resolved_api_key and not resolved_jwt_secret:
             return await call_next(request)
         path = request.url.path
         if path == "/health":
             return await call_next(request)
-        if _request_has_valid_api_key(request):
+        if _request_is_authorized(request):
             return await call_next(request)
-        return JSONResponse(status_code=401, content={"detail": "gateway api key required"})
+        return JSONResponse(status_code=401, content={"detail": "gateway auth required"})
 
     def _submit_run(
         kind: str,
@@ -948,11 +1060,17 @@ def create_gateway_app(
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        auth_modes: list[str] = []
+        if resolved_api_key:
+            auth_modes.append("api_key")
+        if resolved_jwt_secret:
+            auth_modes.append("jwt_hs256")
         return {
             "status": "ok",
             "output_dir": str(store.output_dir.resolve()),
             "worker_alive": bool(runner._thread and runner._thread.is_alive()),
-            "auth_required": bool(resolved_api_key),
+            "auth_required": bool(resolved_api_key or resolved_jwt_secret),
+            "auth_modes": auth_modes,
         }
 
     @app.post("/projects")
@@ -1153,6 +1271,9 @@ def run_gateway_server(
     port: int = 8733,
     output_dir: str | Path = ".parallel-agents-output",
     api_key: str | None = None,
+    jwt_secret: str | None = None,
+    jwt_issuer: str | None = None,
+    jwt_audience: str | None = None,
 ) -> None:
     try:
         import uvicorn
@@ -1161,5 +1282,11 @@ def run_gateway_server(
             "Gateway support requires Uvicorn. Install with `pip install parallel-agents[gateway]`."
         ) from exc
 
-    app = create_gateway_app(output_dir, api_key=api_key)
+    app = create_gateway_app(
+        output_dir,
+        api_key=api_key,
+        jwt_secret=jwt_secret,
+        jwt_issuer=jwt_issuer,
+        jwt_audience=jwt_audience,
+    )
     uvicorn.run(app, host=host, port=port)

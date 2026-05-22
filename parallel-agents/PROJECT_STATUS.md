@@ -44,6 +44,10 @@ The current release line is focused on local, reviewable workflows and a project
   - run listing plus per-run job inspection
   - cancel and retry controls
   - optional API-key protection for non-local exposure
+  - optional JWT HS256 auth with issuer/audience validation
+- MCP product-surface foundation:
+  - `tool_discovery` output with read/write access classes
+  - approval-required metadata for write tools
 - Local desktop/project office foundation:
   - `.parallel-agents/` workspace inside a project folder
   - `office init`, `office status`, and `office home` commands
@@ -94,8 +98,14 @@ parallel-agents office artifacts --project .
 ```bash
 parallel-agents gateway start --host 127.0.0.1 --port 8733
 
-# optional auth for non-local use
+# optional auth for non-local use (API key)
 set PA_GATEWAY_API_KEY=my-secret
+parallel-agents gateway start --host 0.0.0.0 --port 8733
+
+# optional auth for non-local use (JWT HS256)
+set PA_GATEWAY_JWT_SECRET=replace-with-shared-secret
+set PA_GATEWAY_JWT_ISSUER=parallel-agents
+set PA_GATEWAY_JWT_AUDIENCE=parallel-agents-office
 parallel-agents gateway start --host 0.0.0.0 --port 8733
 ```
 
@@ -104,7 +114,7 @@ parallel-agents gateway start --host 0.0.0.0 --port 8733
 - Desktop GUI is available but still maturing (single-user local workflow focus).
 - No hosted MCP endpoint or OAuth yet.
 - No distributed/remote worker execution beyond the current local in-process queue.
-- No hosted-grade auth model yet (OAuth/JWT/session).
+- No hosted-grade OAuth/session model yet (local API key and JWT HS256 are available).
 - No automated GitHub PR comments in this checkpoint.
 - Package publishing is still manual and should only happen after release checks pass.
 

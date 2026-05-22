@@ -8,6 +8,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 - Gateway shutdown lifecycle now uses FastAPI lifespan handlers (removes deprecated `on_event` usage).
 - CI now includes an evaluation-gate smoke check using `examples/eval_gate_results_example.json`.
+- Gateway auth now supports optional JWT HS256 bearer validation:
+  - `PA_GATEWAY_JWT_SECRET` / `--jwt-secret`
+  - optional issuer check via `PA_GATEWAY_JWT_ISSUER` / `--jwt-issuer`
+  - optional audience check via `PA_GATEWAY_JWT_AUDIENCE` / `--jwt-audience`
+- MCP server now exposes `tool_discovery` for read/write capability discovery and approval-gate metadata.
+- Added expanded benchmark fixture: `examples/public_benchmark_v2.json`.
 - Desktop office improvements:
   - project-home summary with recent project picker
   - runs page now executes real pipeline runs
