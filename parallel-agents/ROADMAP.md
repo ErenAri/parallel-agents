@@ -108,11 +108,12 @@ Completed:
 - Desktop GitHub PR creation with run-linked PR summary artifact.
 - Desktop Runs page now executes real pipeline runs with live activity streaming and worker status updates.
 - Desktop project-home release/productivity card from eval artifacts (impact, acceptance, regression, gate, cost, duration).
+- Desktop metric-history timeline with latest-vs-previous deltas from evaluation score artifacts.
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Trend charts and historical comparisons for release/productivity metrics across runs.
+- Charted trend visuals and filterable history views (workflow/project/date slices).
 
 ## Phase 5: Remote MCP Product Surface
 

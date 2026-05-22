@@ -54,6 +54,7 @@ The current release line is focused on local, reviewable workflows and a project
   - live run activity stream and per-worker status updates in desktop UI
   - artifact compare view against previous runs (inline unified diff)
   - release/productivity summary card in desktop home (impact, acceptance, regression, gate, cost, duration)
+  - metric-history timeline with delta vs previous snapshot
   - desktop approvals queue filters and one-click approved issue-plan apply
   - desktop GitHub PR creation flow with run-linked PR summary artifact
   - PyInstaller spec support for the project-office module

@@ -175,6 +175,7 @@ Desktop Office (`parallel-agents-desktop`) now includes:
 - live pipeline run execution with activity streaming and worker status tiles
 - artifact compare against previous runs (inline unified diff)
 - release/productivity summary from eval artifacts (impact, acceptance, regression, gate, cost, duration)
+- metric-history timeline with latest-vs-previous deltas
 - approvals queue with status filters and approved plan apply action
 - company workflow steps through issue-plan apply
 - GitHub PR creation from run context with generated PR summary markdown

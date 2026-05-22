@@ -243,3 +243,66 @@ def test_productivity_snapshot_falls_back_to_results_when_score_missing(tmp_path
     assert snapshot.total_duration_seconds == pytest.approx(45.0)
     assert snapshot.notes
     assert any("Computed score from results artifact." in note for note in snapshot.notes)
+
+
+def test_productivity_trend_reads_multiple_scores_and_gate(tmp_path):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    metrics_dir = office_dir(tmp_path) / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    older_time = datetime(2026, 5, 21, 9, 0, 0, tzinfo=timezone.utc)
+    newer_time = datetime(2026, 5, 22, 9, 0, 0, tzinfo=timezone.utc)
+
+    older_score = EvaluationScore(
+        generated_at=older_time,
+        case_count=4,
+        completed_count=4,
+        failed_count=0,
+        weighted_delivery_impact_score=0.10,
+        acceptance_rate=0.70,
+        regression_rate=0.08,
+        finding_precision=0.60,
+    )
+    newer_score = EvaluationScore(
+        generated_at=newer_time,
+        case_count=5,
+        completed_count=5,
+        failed_count=0,
+        weighted_delivery_impact_score=0.18,
+        acceptance_rate=0.84,
+        regression_rate=0.04,
+        finding_precision=0.79,
+    )
+    gate = EvaluationGateResult(
+        passed=True,
+        failed_rules=[],
+        score=newer_score,
+        aggregate=EvaluationAggregate(
+            case_count=5,
+            completed_count=5,
+            failed_count=0,
+            total_cost_usd=1.2,
+            total_duration_seconds=150.0,
+        ),
+    )
+
+    (metrics_dir / "2026-05-21-score.json").write_text(
+        older_score.model_dump_json(indent=2), encoding="utf-8"
+    )
+    (metrics_dir / "2026-05-22-score.json").write_text(
+        newer_score.model_dump_json(indent=2), encoding="utf-8"
+    )
+    (metrics_dir / "2026-05-22-gate.json").write_text(
+        gate.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    trend = service.productivity_trend(limit=8)
+    assert len(trend) == 2
+    assert trend[0].generated_at == newer_time.isoformat()
+    assert trend[0].gate_passed is True
+    assert trend[0].total_cost_usd == pytest.approx(1.2)
+    assert trend[0].total_duration_seconds == pytest.approx(150.0)
+    assert trend[1].generated_at == older_time.isoformat()
+    assert trend[1].gate_passed is None

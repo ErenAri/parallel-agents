@@ -115,6 +115,22 @@ class ProductivitySnapshot:
 
 
 @dataclass
+class ProductivityTrendPoint:
+    generated_at: str
+    score_path: Path
+    weighted_delivery_impact_score: float | None
+    acceptance_rate: float | None
+    regression_rate: float | None
+    finding_precision: float | None
+    case_count: int
+    completed_count: int
+    failed_count: int
+    gate_passed: bool | None
+    total_cost_usd: float | None
+    total_duration_seconds: float | None
+
+
+@dataclass
 class PullRequestResult:
     run_id: str
     repo: str
@@ -629,6 +645,48 @@ class EngineService:
             notes=notes,
         )
 
+    def productivity_trend(self, *, limit: int = 8) -> list[ProductivityTrendPoint]:
+        root = self.require_project()
+        office_metrics_dir = office_dir(root) / "metrics"
+        project_eval_dir = root / "eval"
+
+        score_files = self._list_matching_paths(
+            [office_metrics_dir, project_eval_dir],
+            ["*score*.json"],
+        )
+
+        points: list[ProductivityTrendPoint] = []
+        for path in score_files:
+            score = self._load_model(path, EvaluationScore)
+            if score is None:
+                continue
+
+            gate = self._load_related_gate(path)
+            aggregate = gate.aggregate if gate is not None else None
+            points.append(
+                ProductivityTrendPoint(
+                    generated_at=score.generated_at.isoformat(),
+                    score_path=path,
+                    weighted_delivery_impact_score=score.weighted_delivery_impact_score,
+                    acceptance_rate=score.acceptance_rate,
+                    regression_rate=score.regression_rate,
+                    finding_precision=score.finding_precision,
+                    case_count=score.case_count,
+                    completed_count=score.completed_count,
+                    failed_count=score.failed_count,
+                    gate_passed=(gate.passed if gate is not None else None),
+                    total_cost_usd=(aggregate.total_cost_usd if aggregate is not None else None),
+                    total_duration_seconds=(
+                        aggregate.total_duration_seconds if aggregate is not None else None
+                    ),
+                )
+            )
+
+        points.sort(key=lambda item: item.generated_at, reverse=True)
+        if limit <= 0:
+            return []
+        return points[:limit]
+
     def latest_run_id(self) -> str | None:
         runs = list_office_run_ids(self._current_project) if self._current_project else []
         return runs[0] if runs else None
@@ -961,6 +1019,31 @@ class EngineService:
             return model_cls.model_validate(payload)
         except Exception:
             return None
+
+    @staticmethod
+    def _list_matching_paths(base_dirs: list[Path], patterns: list[str]) -> list[Path]:
+        found: dict[str, Path] = {}
+        for base_dir in base_dirs:
+            if not base_dir.exists():
+                continue
+            for pattern in patterns:
+                for path in base_dir.glob(pattern):
+                    if path.is_file():
+                        found[str(path.resolve())] = path
+        return sorted(found.values(), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    def _load_related_gate(self, score_path: Path) -> EvaluationGateResult | None:
+        candidates = [
+            score_path.with_name(score_path.name.replace("score", "gate")),
+            score_path.with_name(score_path.name.replace("Score", "Gate")),
+            score_path.parent / "eval-gate.json",
+            score_path.parent / "gate.json",
+        ]
+        for candidate in candidates:
+            gate = self._load_model(candidate, EvaluationGateResult)
+            if gate is not None:
+                return gate
+        return None
 
 
 def _stat_iso(path: Path) -> str:

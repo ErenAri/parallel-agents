@@ -71,9 +71,17 @@ class ProjectsPage(Page):
         self.productivity_stats = QLabel("")
         self.productivity_stats.setStyleSheet("color: #8a90a2;")
         self.productivity_stats.setWordWrap(True)
+        self.productivity_trend_label = QLabel("Recent Metric History")
+        self.productivity_trend_label.setStyleSheet("font-weight: 600; padding-top: 8px;")
+        self.productivity_trend_meta = QLabel("")
+        self.productivity_trend_meta.setStyleSheet("color: #8a90a2;")
+        self.productivity_trend_list = QListWidget()
         productivity_layout.addWidget(self.productivity_label)
         productivity_layout.addWidget(self.productivity_meta)
         productivity_layout.addWidget(self.productivity_stats)
+        productivity_layout.addWidget(self.productivity_trend_label)
+        productivity_layout.addWidget(self.productivity_trend_meta)
+        productivity_layout.addWidget(self.productivity_trend_list)
         self.body_layout.addWidget(self.productivity_card)
 
         recent_projects_title = QLabel("Recent Project Folders")
@@ -176,6 +184,8 @@ class ProjectsPage(Page):
 
     def _refresh_productivity(self) -> None:
         snapshot = self.engine.productivity_snapshot()
+        trend = self.engine.productivity_trend(limit=8)
+        self.productivity_trend_list.clear()
         source_bits: list[str] = []
         if snapshot.score_path is not None:
             source_bits.append(f"score: {snapshot.score_path.name}")
@@ -191,6 +201,7 @@ class ProjectsPage(Page):
             self.productivity_stats.setText(
                 "Run `parallel-agents eval score` (and optionally `eval breakdown`, `eval gate`) to populate this view."
             )
+            self.productivity_trend_meta.setText("")
             return
 
         generated = snapshot.generated_at or "unknown time"
@@ -217,7 +228,38 @@ class ProjectsPage(Page):
             lines.append(f"Top workflow bucket: {snapshot.top_workflow}")
         if snapshot.notes:
             lines.append(f"Notes: {'; '.join(snapshot.notes)}")
+
+        if len(trend) >= 2:
+            latest = trend[0]
+            previous = trend[1]
+            lines.append(
+                "Delta vs previous: "
+                f"impact {_delta_pct(latest.weighted_delivery_impact_score, previous.weighted_delivery_impact_score)}, "
+                f"acceptance {_delta_pct(latest.acceptance_rate, previous.acceptance_rate)}, "
+                f"regression {_delta_pct(latest.regression_rate, previous.regression_rate)}"
+            )
         self.productivity_stats.setText("\n".join(lines))
+
+        if not trend:
+            self.productivity_trend_meta.setText("No historical score artifacts found.")
+            return
+        self.productivity_trend_meta.setText(f"{len(trend)} score snapshots")
+        for entry in trend:
+            gate_text = "gate n/a"
+            if entry.gate_passed is True:
+                gate_text = "gate pass"
+            elif entry.gate_passed is False:
+                gate_text = "gate fail"
+            text = (
+                f"{entry.generated_at}  |  impact {_pct(entry.weighted_delivery_impact_score)}  "
+                f"|  acceptance {_pct(entry.acceptance_rate)}  "
+                f"|  regression {_pct(entry.regression_rate)}  "
+                f"|  {gate_text}  "
+                f"|  {entry.score_path.name}"
+            )
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, str(entry.score_path))
+            self.productivity_trend_list.addItem(item)
 
     def _refresh_recent_projects(self) -> None:
         self.recent_projects_list.clear()
@@ -263,3 +305,11 @@ def _num(value: int | None) -> str:
     if value is None:
         return "n/a"
     return str(value)
+
+
+def _delta_pct(current: float | None, previous: float | None) -> str:
+    if current is None or previous is None:
+        return "n/a"
+    delta = (current - previous) * 100.0
+    sign = "+" if delta >= 0 else ""
+    return f"{sign}{delta:.2f}%"
