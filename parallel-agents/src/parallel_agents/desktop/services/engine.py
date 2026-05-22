@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from parallel_agents.company_artifacts import (
     append_company_artifact_event,
@@ -39,6 +39,8 @@ from parallel_agents.project_office import (
     office_output_dir,
     resolve_project_root,
 )
+from parallel_agents.pipeline import Pipeline
+from parallel_agents.config import PipelineConfig
 
 
 @dataclass
@@ -93,6 +95,16 @@ class PullRequestResult:
     artifact_path: Path
 
 
+@dataclass
+class PipelineRunResult:
+    run_id: str
+    summary: str
+    output_path: Path
+    total_tokens: int
+    total_cost_usd: float
+    worker_statuses: dict[str, str]
+
+
 class EngineService:
     """In-process bridge to the engine. No async leaks into UI code."""
 
@@ -144,6 +156,60 @@ class EngineService:
             office_dir=office_dir(root),
             run_count=len(list_office_run_ids(root)),
             extra=payload,
+        )
+
+    # -- run execution -------------------------------------------------
+
+    async def run_pipeline(
+        self,
+        task: str,
+        *,
+        on_status: Callable[[str], None] | None = None,
+    ) -> PipelineRunResult:
+        root = self.require_project()
+        config = PipelineConfig(output_dir=str(office_output_dir(root)))
+        pipeline = Pipeline(config)
+        final_output = await pipeline.run(
+            task,
+            repo_path=str(root),
+            on_status=on_status,
+        )
+        run_id = str(final_output.metadata.get("run_id", "")).strip()
+        if not run_id:
+            raise RuntimeError("Pipeline completed without a run_id.")
+
+        output_path = persist_company_artifact(
+            office_output_dir(root),
+            run_id,
+            "final-output",
+            final_output.model_dump(mode="json"),
+        )
+        append_company_artifact_event(
+            office_output_dir(root),
+            run_id,
+            "final-output",
+            {"event": "created", "source": "desktop-runs", "task": task},
+        )
+        self._write_audit(
+            run_id,
+            {
+                "event": "run.execute",
+                "task": task,
+                "repo": str(root),
+                "has_patch": bool(final_output.patch),
+            },
+        )
+        cost = final_output.metadata.get("cost", {})
+        return PipelineRunResult(
+            run_id=run_id,
+            summary=final_output.summary,
+            output_path=output_path,
+            total_tokens=int(cost.get("total_tokens", 0) or 0),
+            total_cost_usd=float(cost.get("total_cost_usd", 0.0) or 0.0),
+            worker_statuses={
+                name: str(result.status)
+                for name, result in final_output.worker_results.items()
+            },
         )
 
     # -- company workflows ---------------------------------------------

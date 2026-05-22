@@ -30,7 +30,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Parallel Agents Office")
 
         self.engine = EngineService()
-        # apply persisted user-level settings on launch (project ones load on open)
+        # Apply persisted user-level settings on launch (project ones load on open).
         self.engine.settings_store().load()
 
         central = QWidget()
@@ -54,6 +54,7 @@ class MainWindow(QMainWindow):
         company_page = CompanyPage(self.engine)
         artifacts_page = ArtifactsPage(self.engine)
         projects_page = ProjectsPage(self.engine)
+        runs_page = RunsPage(self.engine)
 
         company_page.artifact_created.connect(
             lambda run_id, path: self._jump_to_artifact(run_id, path)
@@ -62,11 +63,12 @@ class MainWindow(QMainWindow):
             lambda run_id, _path: self._update_status_run(run_id)
         )
         projects_page.project_opened.connect(self._update_status_project)
+        runs_page.run_completed.connect(self._update_status_run)
 
         self.pages: dict[str, QWidget] = {
             "projects": projects_page,
             "company": company_page,
-            "runs": RunsPage(self.engine),
+            "runs": runs_page,
             "approvals": ApprovalsPage(self.engine),
             "artifacts": artifacts_page,
             "settings": SettingsPage(self.engine),
@@ -90,14 +92,12 @@ class MainWindow(QMainWindow):
         self._run_label = make_run_label()
         self._llm_label = make_llm_label()
 
-        spacer_dot = QLabel("·")
-        spacer_dot.setObjectName("StatusItem")
-        spacer_dot2 = QLabel("·")
-        spacer_dot2.setObjectName("StatusItem")
+        separator = QLabel("|")
+        separator.setObjectName("StatusItem")
 
         status.addWidget(self._project_label)
         status.addPermanentWidget(self._run_label)
-        status.addPermanentWidget(spacer_dot2)
+        status.addPermanentWidget(separator)
         status.addPermanentWidget(self._llm_label)
         self.setStatusBar(status)
 
@@ -108,13 +108,13 @@ class MainWindow(QMainWindow):
         else:
             self._project_label.setText(f"Project: {info.name}")
         latest = self.engine.latest_run_id()
-        self._run_label.setText(f"Run: {latest}" if latest else "Run: —")
+        self._run_label.setText(f"Run: {latest}" if latest else "Run: -")
         self._llm_label.setText(llm_indicator_text())
 
     def _update_status_project(self, info) -> None:
         self._project_label.setText(f"Project: {info.name}")
         latest = self.engine.latest_run_id()
-        self._run_label.setText(f"Run: {latest}" if latest else "Run: —")
+        self._run_label.setText(f"Run: {latest}" if latest else "Run: -")
         self._llm_label.setText(llm_indicator_text())
 
     def _update_status_run(self, run_id: str) -> None:

@@ -172,6 +172,7 @@ parallel-agents office artifacts --project ./my-project
 
 Desktop Office (`parallel-agents-desktop`) now includes:
 - project home summary with recent project picker
+- live pipeline run execution with activity streaming and worker status tiles
 - approvals queue with status filters and approved plan apply action
 - company workflow steps through issue-plan apply
 - GitHub PR creation from run context with generated PR summary markdown

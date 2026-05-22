@@ -10,6 +10,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - CI now includes an evaluation-gate smoke check using `examples/eval_gate_results_example.json`.
 - Desktop office improvements:
   - project-home summary with recent project picker
+  - runs page now executes real pipeline runs
+  - live run activity stream and worker status updates during execution
   - approvals queue filters and approved-plan apply action
   - GitHub PR creation flow from desktop with run-linked PR summary artifact
 

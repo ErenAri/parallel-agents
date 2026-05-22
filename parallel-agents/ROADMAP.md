@@ -94,7 +94,7 @@ Remaining:
 
 ## Phase 4: Local Desktop Office
 
-Status: started.
+Status: in progress.
 
 Goal: local `.exe` experience that works inside the selected project folder.
 
@@ -106,11 +106,11 @@ Completed:
 - Desktop project-home summary and recent project picker.
 - Desktop approvals queue filters with approved issue-plan apply action.
 - Desktop GitHub PR creation with run-linked PR summary artifact.
+- Desktop Runs page now executes real pipeline runs with live activity streaming and worker status updates.
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Pipeline run page execution wiring (currently shell + status UI).
 - Richer artifact diff/preview and cross-run comparison UX.
 - Richer release and productivity views.
 
