@@ -195,6 +195,38 @@ class CompanyPage(Page):
         self.apply_card.extra_row.addWidget(self.dry_run_checkbox)
         self.apply_card.extra_row.addStretch(1)
 
+        self.pr_card = self._make_card(
+            inner_layout, "9. GitHub PR",
+            "Create a GitHub PR from the current branch with a run-linked PR summary.",
+            "Create PR", self._create_pr,
+            enabled=False,
+        )
+        self.pr_repo_input = _editable_combo(
+            self.history.get("repo_ref"),
+            placeholder="owner/repo",
+        )
+        self.pr_head_input = QLineEdit()
+        self.pr_head_input.setPlaceholderText("head branch (e.g. feature/my-change)")
+        self.pr_base_input = QLineEdit()
+        self.pr_base_input.setText("main")
+        self.pr_title_input = QLineEdit()
+        self.pr_title_input.setPlaceholderText("Optional PR title")
+        self.pr_draft_checkbox = QCheckBox("Draft PR")
+        self.pr_draft_checkbox.setChecked(True)
+
+        self.pr_card.extra_row.addWidget(QLabel("Repo:"))
+        self.pr_card.extra_row.addWidget(self.pr_repo_input, stretch=1)
+        self.pr_card.extra_row.addWidget(QLabel("Head:"))
+        self.pr_card.extra_row.addWidget(self.pr_head_input, stretch=1)
+        self.pr_card.extra_row.addWidget(QLabel("Base:"))
+        self.pr_card.extra_row.addWidget(self.pr_base_input)
+        self.pr_card.extra_row.addWidget(self.pr_draft_checkbox)
+
+        pr_title_row = QHBoxLayout()
+        pr_title_row.addWidget(QLabel("Title:"))
+        pr_title_row.addWidget(self.pr_title_input, stretch=1)
+        self.pr_card.layout().insertLayout(3, pr_title_row)
+
         inner_layout.addStretch(1)
         self._refresh_state()
 
@@ -311,6 +343,34 @@ class CompanyPage(Page):
             after=self._on_apply_done,
         )
 
+    def _create_pr(self) -> None:
+        if not self._require_run("PR creation"):
+            return
+        repo = self.pr_repo_input.currentText().strip()
+        if not repo or "/" not in repo:
+            QMessageBox.warning(self, "Repo ref", "Enter owner/repo (e.g. acme/parallel-agents).")
+            return
+        head = self.pr_head_input.text().strip()
+        if not head:
+            QMessageBox.warning(self, "Head branch", "Enter a head branch to create the PR from.")
+            return
+        base = self.pr_base_input.text().strip() or "main"
+        title = self.pr_title_input.text().strip() or None
+        draft = self.pr_draft_checkbox.isChecked()
+        rid = self._run_id
+        self._run_step(
+            self.pr_card,
+            lambda: self.engine.create_pull_request(
+                rid,
+                repo_ref=repo,
+                head=head,
+                base=base,
+                title=title,
+                draft=draft,
+            ),
+            after=self._on_pr_done,
+        )
+
     # -- helpers --------------------------------------------------------
 
     def _require_project(self) -> bool:
@@ -390,6 +450,24 @@ class CompanyPage(Page):
         QMessageBox.information(self, f"Apply complete ({mode})", msg)
         self._refresh_state()
 
+    def _on_pr_done(self, result) -> None:
+        self.pr_card.set_status("done", "WorkerStatusDone")
+        self.pr_card.button.setEnabled(True)
+        self.history.add("repo_ref", result.repo)
+        self.artifact_created.emit(result.run_id, result.artifact_path)
+        QMessageBox.information(
+            self,
+            "PR created",
+            (
+                f"PR URL:\n{result.url}\n\n"
+                f"Repo: {result.repo}\n"
+                f"Head -> Base: {result.head} -> {result.base}\n"
+                f"Draft: {'yes' if result.draft else 'no'}\n"
+                f"Summary: {result.summary_path}"
+            ),
+        )
+        self._refresh_state()
+
     def _on_failed(self, card, error: str) -> None:
         from parallel_agents.desktop.widgets.error_dialog import show_error
 
@@ -427,6 +505,7 @@ class CompanyPage(Page):
         _mark(self.sprint_card, "sprint")
         _mark(self.issue_plan_card, "issue-plan")
         _mark(self.apply_card, "issue-plan-apply")
+        _mark(self.pr_card, "pr-create")
 
         brief_done = "brief" in artifacts
         roadmap_done = "roadmap" in artifacts
@@ -464,3 +543,18 @@ class CompanyPage(Page):
         self.apply_card.button.setEnabled(plan_approval_ok)
         if plan_done and not plan_approval_ok:
             self.apply_card.set_status("awaiting approval", "WorkerStatusIdle")
+
+        pr_ready = (
+            plan_done
+            or "issue-plan-apply" in artifacts
+            or "final-output" in artifacts
+        )
+        self.pr_card.button.setEnabled(pr_ready)
+
+        if not self.pr_head_input.text().strip():
+            try:
+                home = self.engine.workspace_home()
+                if home.current_branch:
+                    self.pr_head_input.setText(home.current_branch)
+            except Exception:
+                pass

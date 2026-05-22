@@ -220,6 +220,7 @@ async def create_pr(
     body: str,
     head: str,
     base: str = "main",
+    draft: bool = False,
 ) -> str | None:
     """Create a GitHub PR using the `gh` CLI. Returns PR URL or None."""
     if not _gh_available():
@@ -233,6 +234,7 @@ async def create_pr(
         "--body", body,
         "--head", head,
         "--base", base,
+        *(["--draft"] if draft else []),
     )
     if rc == 0:
         return stdout.strip()

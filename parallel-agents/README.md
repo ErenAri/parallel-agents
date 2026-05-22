@@ -170,6 +170,12 @@ parallel-agents office home --project ./my-project
 parallel-agents office artifacts --project ./my-project
 ```
 
+Desktop Office (`parallel-agents-desktop`) now includes:
+- project home summary with recent project picker
+- approvals queue with status filters and approved plan apply action
+- company workflow steps through issue-plan apply
+- GitHub PR creation from run context with generated PR summary markdown
+
 The gateway remains an internal job API for local automation and future desktop shells. It is not the primary product UI.
 
 ## Gateway API

@@ -103,14 +103,15 @@ Completed:
 - Project-folder workspace layout under `.parallel-agents/`.
 - `parallel-agents office init` to create local workspace metadata and directories.
 - `parallel-agents office status` to inspect workspace health.
+- Desktop project-home summary and recent project picker.
+- Desktop approvals queue filters with approved issue-plan apply action.
+- Desktop GitHub PR creation with run-linked PR summary artifact.
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Native/desktop shell around the local workspace.
-- Project picker rooted in local folders.
-- Local artifact browser and approval queue.
-- GitHub connection and PR creation from the desktop office.
+- Pipeline run page execution wiring (currently shell + status UI).
+- Richer artifact diff/preview and cross-run comparison UX.
 - Richer release and productivity views.
 
 ## Phase 5: Remote MCP Product Surface

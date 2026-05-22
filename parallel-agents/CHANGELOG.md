@@ -8,6 +8,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 - Gateway shutdown lifecycle now uses FastAPI lifespan handlers (removes deprecated `on_event` usage).
 - CI now includes an evaluation-gate smoke check using `examples/eval_gate_results_example.json`.
+- Desktop office improvements:
+  - project-home summary with recent project picker
+  - approvals queue filters and approved-plan apply action
+  - GitHub PR creation flow from desktop with run-linked PR summary artifact
 
 ## [0.4.3] - 2026-05-22
 

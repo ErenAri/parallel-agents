@@ -7,6 +7,7 @@ in-process calls for HTTP-to-gateway later without touching widgets.
 from __future__ import annotations
 
 import json
+import subprocess
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from parallel_agents.company_workflows import (
     build_architecture_rfc,
     build_issue_plan_from_roadmap,
     build_prfaq,
+    render_pr_summary,
     build_roadmap,
     build_sprint_plan,
     create_product_brief,
@@ -61,6 +63,34 @@ class ArtifactResult:
     artifact: str
     artifact_path: Path
     approval_path: Path
+
+
+@dataclass
+class WorkspaceHome:
+    project_name: str
+    project_root: Path
+    office_dir: Path
+    run_count: int
+    artifact_count: int
+    pending_approval_count: int
+    approved_approval_count: int
+    rejected_approval_count: int
+    latest_run_id: str | None
+    current_branch: str | None
+    recent_runs: list[dict[str, Any]]
+
+
+@dataclass
+class PullRequestResult:
+    run_id: str
+    repo: str
+    url: str
+    title: str
+    head: str
+    base: str
+    draft: bool
+    summary_path: Path
+    artifact_path: Path
 
 
 class EngineService:
@@ -282,6 +312,131 @@ class EngineService:
         )
         return result
 
+    def create_pull_request(
+        self,
+        run_id: str,
+        *,
+        repo_ref: str,
+        head: str,
+        base: str = "main",
+        title: str | None = None,
+        draft: bool = True,
+    ) -> PullRequestResult:
+        import asyncio
+
+        from parallel_agents.tools.github_tools import create_pr, parse_repo_ref
+
+        root = self.require_project()
+        parsed = parse_repo_ref(repo_ref)
+        if not parsed:
+            raise ValueError("repo must be owner/repo or a GitHub repository URL.")
+        owner, repo = parsed
+
+        clean_head = head.strip()
+        clean_base = base.strip() or "main"
+        if not clean_head:
+            raise ValueError("head branch cannot be empty.")
+
+        resolved_title = (title or "").strip() or f"Parallel Agents Office: {run_id}"
+        summary_markdown = self._build_pr_summary(run_id)
+        summary_path = office_output_dir(root) / run_id / "company" / "pr-summary.md"
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(summary_markdown, encoding="utf-8")
+
+        pr_url = asyncio.run(
+            create_pr(
+                owner,
+                repo,
+                resolved_title,
+                summary_markdown,
+                head=clean_head,
+                base=clean_base,
+                draft=draft,
+            )
+        )
+        if not pr_url:
+            raise RuntimeError(
+                "Failed to create PR via gh. Verify `gh auth status`, repository access, and branch push."
+            )
+
+        payload = {
+            "run_id": run_id,
+            "repo": f"{owner}/{repo}",
+            "url": pr_url,
+            "title": resolved_title,
+            "head": clean_head,
+            "base": clean_base,
+            "draft": draft,
+            "summary_path": str(summary_path),
+            "created_at": _iso_now(),
+        }
+        artifact_path = persist_company_artifact(
+            office_output_dir(root),
+            run_id,
+            "pr-create",
+            payload,
+        )
+        self._write_audit(
+            run_id,
+            {
+                "event": "pr.create",
+                "repo": payload["repo"],
+                "url": payload["url"],
+                "head": clean_head,
+                "base": clean_base,
+                "draft": draft,
+            },
+        )
+        return PullRequestResult(
+            run_id=run_id,
+            repo=payload["repo"],
+            url=pr_url,
+            title=resolved_title,
+            head=clean_head,
+            base=clean_base,
+            draft=draft,
+            summary_path=summary_path,
+            artifact_path=artifact_path,
+        )
+
+    def workspace_home(self) -> WorkspaceHome:
+        project = self.current_project()
+        if project is None:
+            raise RuntimeError("No project is open.")
+
+        root = project.root
+        runs = self.list_runs()
+        approvals = self.list_all_approvals()
+
+        artifact_count = 0
+        recent_runs: list[dict[str, Any]] = []
+        for run in runs:
+            run_id = run["id"]
+            artifacts = self.list_artifacts(run_id)
+            artifact_count += len(artifacts)
+            recent_runs.append(
+                {
+                    "id": run_id,
+                    "created_at": run.get("created_at", ""),
+                    "artifact_count": len(artifacts),
+                }
+            )
+
+        statuses = [str(entry.get("data", {}).get("status", "pending")) for entry in approvals]
+        return WorkspaceHome(
+            project_name=project.name,
+            project_root=root,
+            office_dir=project.office_dir,
+            run_count=len(runs),
+            artifact_count=artifact_count,
+            pending_approval_count=sum(1 for s in statuses if s == "pending"),
+            approved_approval_count=sum(1 for s in statuses if s == "approved"),
+            rejected_approval_count=sum(1 for s in statuses if s == "rejected"),
+            latest_run_id=(runs[0]["id"] if runs else None),
+            current_branch=self._git_current_branch(root),
+            recent_runs=recent_runs[:8],
+        )
+
     def latest_run_id(self) -> str | None:
         runs = list_office_run_ids(self._current_project) if self._current_project else []
         return runs[0] if runs else None
@@ -316,6 +471,52 @@ class EngineService:
             )
         data = json.loads(path.read_text(encoding="utf-8"))
         return model_cls.model_validate(data)
+
+    def _load_artifact_payload(self, run_id: str, name: str) -> dict[str, Any] | None:
+        root = self.require_project()
+        path = office_output_dir(root) / run_id / "company" / f"{name}.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _build_pr_summary(self, run_id: str) -> str:
+        root = self.require_project()
+        final_output = self._load_artifact_payload(run_id, "final-output")
+        if final_output is None:
+            apply_payload = self._load_artifact_payload(run_id, "issue-plan-apply")
+            if apply_payload is not None:
+                created = sum(
+                    1 for issue in apply_payload.get("issues", [])
+                    if isinstance(issue, dict) and issue.get("created")
+                )
+                planned = int(apply_payload.get("issues_planned", 0) or 0)
+                mode = str(apply_payload.get("mode", "unknown"))
+                repo = str(apply_payload.get("repo", "unknown"))
+                final_output = {
+                    "summary": (
+                        f"Company run `{run_id}` generated GitHub plan/apply output "
+                        f"for `{repo}` ({mode}, {created}/{planned} issues created)."
+                    ),
+                    "risk_report": [],
+                    "metadata": {"tests_run": []},
+                }
+            else:
+                brief_payload = self._load_artifact_payload(run_id, "brief") or {}
+                brief_title = str(brief_payload.get("title", "")).strip() or f"Run {run_id}"
+                final_output = {
+                    "summary": f"Parallel Agents Office artifacts for `{brief_title}`.",
+                    "risk_report": [],
+                    "metadata": {"tests_run": []},
+                }
+        artifacts = {
+            path.stem: str(path.relative_to(office_dir(root)))
+            for path in self.list_artifacts(run_id)
+        }
+        return render_pr_summary(final_output, run_id=run_id, artifacts=artifacts)
 
     def _find_approval(self, run_id: str, *, artifact: str) -> dict[str, Any] | None:
         for entry in self._list_approvals(status=None):
@@ -525,6 +726,23 @@ class EngineService:
         with (audit_dir / "events.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record))
             fh.write("\n")
+
+    @staticmethod
+    def _git_current_branch(root: Path) -> str | None:
+        try:
+            proc = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=str(root),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return None
+        if proc.returncode != 0:
+            return None
+        branch = proc.stdout.strip()
+        return branch or None
 
 
 def _stat_iso(path: Path) -> str:

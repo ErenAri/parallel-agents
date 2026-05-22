@@ -49,6 +49,9 @@ The current release line is focused on local, reviewable workflows and a project
   - `office init`, `office status`, and `office home` commands
   - `office artifacts` for run-linked artifact inspection
   - workspace directories for runs, artifacts, approvals, audit, and metrics
+  - desktop project-home summary with recent project picker
+  - desktop approvals queue filters and one-click approved issue-plan apply
+  - desktop GitHub PR creation flow with run-linked PR summary artifact
   - PyInstaller spec support for the project-office module
 
 ## Experimental
@@ -87,11 +90,11 @@ parallel-agents gateway start --host 0.0.0.0 --port 8733
 
 ## Known Limitations
 
-- No native desktop GUI yet; current project-office surface is CLI/binary commands.
+- Desktop GUI is available but still maturing (single-user local workflow focus).
 - No hosted MCP endpoint or OAuth yet.
 - No distributed/remote worker execution beyond the current local in-process queue.
 - No hosted-grade auth model yet (OAuth/JWT/session).
-- No automated GitHub PR creation/commenting in this checkpoint.
+- No automated GitHub PR comments in this checkpoint.
 - Package publishing is still manual and should only happen after release checks pass.
 
 ## Next Milestone

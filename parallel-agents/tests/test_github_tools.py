@@ -10,6 +10,7 @@ import pytest
 from parallel_agents.tools.github_tools import (
     GitHubIssue,
     GitHubPullRequest,
+    create_pr,
     create_issue,
     ensure_milestone,
     fetch_issue,
@@ -187,3 +188,23 @@ class TestFetchPullRequest:
         with patch("parallel_agents.tools.github_tools._gh_available", return_value=True):
             pr = await fetch_pull_request("https://github.com/owner/repo/issues/7")
         assert pr is None
+
+
+class TestCreatePr:
+    @pytest.mark.asyncio
+    async def test_create_pr_draft_passes_flag(self):
+        with patch("parallel_agents.tools.github_tools._gh_available", return_value=True):
+            run_mock = AsyncMock(return_value=("https://github.com/owner/repo/pull/3\n", 0))
+            with patch("parallel_agents.tools.github_tools._run_gh", new=run_mock):
+                url = await create_pr(
+                    "owner",
+                    "repo",
+                    "Title",
+                    "Body",
+                    head="feature/x",
+                    base="main",
+                    draft=True,
+                )
+        assert url == "https://github.com/owner/repo/pull/3"
+        args = run_mock.await_args.args
+        assert "--draft" in args
