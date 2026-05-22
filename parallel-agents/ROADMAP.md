@@ -111,7 +111,6 @@ Completed:
 
 Remaining:
 
-- Richer artifact diff/preview and cross-run comparison UX.
 - Richer release and productivity views.
 
 ## Phase 5: Remote MCP Product Surface

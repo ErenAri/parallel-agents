@@ -52,6 +52,7 @@ The current release line is focused on local, reviewable workflows and a project
   - desktop project-home summary with recent project picker
   - desktop Runs page wired to execute real pipeline runs
   - live run activity stream and per-worker status updates in desktop UI
+  - artifact compare view against previous runs (inline unified diff)
   - desktop approvals queue filters and one-click approved issue-plan apply
   - desktop GitHub PR creation flow with run-linked PR summary artifact
   - PyInstaller spec support for the project-office module
