@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import hmac
 import json
 import os
@@ -859,14 +860,18 @@ def create_gateway_app(
     runner = GatewayJobRunner(store=store, run_handler=_run_handler)
     runner.start()
 
+    @asynccontextmanager
+    async def _lifespan(_app: Any):
+        try:
+            yield
+        finally:
+            runner.stop()
+
     app = FastAPI(
         title="Parallel Agents Gateway",
         version="0.1.0",
+        lifespan=_lifespan,
     )
-
-    @app.on_event("shutdown")
-    def _shutdown_runner() -> None:
-        runner.stop()
 
     def _request_has_valid_api_key(request: Request) -> bool:
         if not resolved_api_key:

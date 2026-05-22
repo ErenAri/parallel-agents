@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-05-22T11:40:00Z",
+  "dataset_name": "ci-gate-smoke",
+  "dataset_path": "examples/eval_gate_results_example.json",
+  "baseline_acceptance_rate": 0.5,
+  "baseline_regression_rate": 0.1,
+  "config": {
+    "planner_model": "haiku",
+    "judge_model": "haiku",
+    "permission_mode": "default",
+    "store_backend": "file",
+    "max_parallel_workers": 4,
+    "enabled_workers": [
+      "security",
+      "test",
+      "perf",
+      "devops",
+      "arch",
+      "docs",
+      "code",
+      "review"
+    ]
+  },
+  "runs": [
+    {
+      "case_id": "SEC-001",
+      "task": "Review auth module for security and reliability gaps.",
+      "repo_path": ".",
+      "baseline_human_minutes": 60.0,
+      "started_at": "2026-05-22T11:39:00Z",
+      "completed_at": "2026-05-22T11:40:00Z",
+      "duration_seconds": 60.0,
+      "status": "success",
+      "run_id": "ci-smoke-run-001",
+      "summary": "Smoketest run succeeded.",
+      "error_message": null,
+      "patch_generated": false,
+      "risk_items": 0,
+      "findings_count": 2,
+      "recommendations_count": 2,
+      "worker_error_count": 0,
+      "total_tokens": 1200,
+      "total_cost_usd": 0.02,
+      "annotations": {
+        "reviewer_minutes": 5.0,
+        "accepted_without_major_edits": true,
+        "introduced_regression": false,
+        "findings_true_positives": 2,
+        "findings_false_positives": 0
+      }
+    }
+  ]
+}

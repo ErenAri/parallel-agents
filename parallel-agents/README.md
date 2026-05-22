@@ -412,6 +412,8 @@ parallel-agents eval sync-ci \
 
 You can copy from `examples/eval_ci_outcomes_example.json`.
 
+CI gate smoke fixture is available at `examples/eval_gate_results_example.json`.
+
 Scoring includes:
 - speed gain vs baseline human minutes
 - acceptance rate and gain vs baseline

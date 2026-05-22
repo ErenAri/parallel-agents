@@ -29,6 +29,17 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short
 
+      - name: Eval gate smoke
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          parallel-agents eval gate \
+            --results examples/eval_gate_results_example.json \
+            --min-weighted-impact 0.05 \
+            --max-regression-rate 0.20 \
+            --min-acceptance-rate 0.50 \
+            --min-finding-precision 0.70 \
+            --max-failed-count 0
+
   lint:
     runs-on: ubuntu-latest
     steps:
