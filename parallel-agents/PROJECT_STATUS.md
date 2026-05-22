@@ -59,6 +59,7 @@ The current release line is focused on local, reviewable workflows and a project
   - trend export actions (CSV and Markdown) from desktop controls
   - graphical trend chart with PNG export for the selected slice/window/metric
   - cross-run baseline vs candidate benchmark comparison panel with markdown export
+  - comparison drill-down sections for workflow/project/case-level change drivers
   - desktop approvals queue filters and one-click approved issue-plan apply
   - desktop GitHub PR creation flow with run-linked PR summary artifact
   - PyInstaller spec support for the project-office module

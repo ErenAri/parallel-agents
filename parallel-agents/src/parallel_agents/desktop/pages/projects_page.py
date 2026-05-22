@@ -862,6 +862,41 @@ def _comparison_report_text(comparison: ProductivityComparison) -> str:
         "Gate baseline/candidate: "
         f"{_gate_text(comparison.baseline_gate_passed)} -> {_gate_text(comparison.candidate_gate_passed)}",
     ]
+    if comparison.top_workflow_deltas:
+        lines.append("")
+        lines.append("Top workflow deltas:")
+        for entry in comparison.top_workflow_deltas:
+            lines.append(
+                "- "
+                f"{entry.key}: cases {_signed_int(entry.case_count_delta)}, "
+                f"failed {_signed_int(entry.failed_count_delta)}, "
+                f"cost {_signed_usd(entry.total_cost_usd_delta)}, "
+                f"duration {_signed_duration(entry.total_duration_seconds_delta)}"
+            )
+    if comparison.top_project_deltas:
+        lines.append("")
+        lines.append("Top project deltas:")
+        for entry in comparison.top_project_deltas:
+            lines.append(
+                "- "
+                f"{entry.key}: cases {_signed_int(entry.case_count_delta)}, "
+                f"failed {_signed_int(entry.failed_count_delta)}, "
+                f"cost {_signed_usd(entry.total_cost_usd_delta)}, "
+                f"duration {_signed_duration(entry.total_duration_seconds_delta)}"
+            )
+    if comparison.case_changes:
+        lines.append("")
+        lines.append("Top case changes:")
+        for entry in comparison.case_changes:
+            lines.append(
+                "- "
+                f"{entry.case_id}: status {entry.baseline_status or 'n/a'} -> {entry.candidate_status or 'n/a'}, "
+                f"cost {_signed_usd(entry.total_cost_usd_delta)}, "
+                f"duration {_signed_duration(entry.duration_seconds_delta)}, "
+                f"findings {_signed_optional_int(entry.findings_count_delta)}, "
+                f"recs {_signed_optional_int(entry.recommendations_count_delta)}, "
+                f"patch_changed {'yes' if entry.patch_generated_changed else 'no'}"
+            )
     return "\n".join(lines)
 
 
@@ -889,6 +924,58 @@ def _comparison_report_markdown(comparison: ProductivityComparison) -> str:
         f"{_gate_text(comparison.baseline_gate_passed)} -> {_gate_text(comparison.candidate_gate_passed)}",
         "",
     ]
+    if comparison.top_workflow_deltas:
+        lines.extend(
+            [
+                "## Workflow Deltas",
+                "",
+                "| Workflow | Cases | Failed | Cost (USD) | Duration |",
+                "|---|---:|---:|---:|---:|",
+            ]
+        )
+        for entry in comparison.top_workflow_deltas:
+            lines.append(
+                "| "
+                f"{entry.key} | {_signed_int(entry.case_count_delta)} | {_signed_int(entry.failed_count_delta)} | "
+                f"{_signed_usd(entry.total_cost_usd_delta)} | {_signed_duration(entry.total_duration_seconds_delta)} |"
+            )
+        lines.append("")
+    if comparison.top_project_deltas:
+        lines.extend(
+            [
+                "## Project Deltas",
+                "",
+                "| Project | Cases | Failed | Cost (USD) | Duration |",
+                "|---|---:|---:|---:|---:|",
+            ]
+        )
+        for entry in comparison.top_project_deltas:
+            lines.append(
+                "| "
+                f"{entry.key} | {_signed_int(entry.case_count_delta)} | {_signed_int(entry.failed_count_delta)} | "
+                f"{_signed_usd(entry.total_cost_usd_delta)} | {_signed_duration(entry.total_duration_seconds_delta)} |"
+            )
+        lines.append("")
+    if comparison.case_changes:
+        lines.extend(
+            [
+                "## Case Changes",
+                "",
+                "| Case | Status | Cost | Duration | Findings | Recs | Patch Changed |",
+                "|---|---|---:|---:|---:|---:|---|",
+            ]
+        )
+        for entry in comparison.case_changes:
+            status_text = f"{entry.baseline_status or 'n/a'} -> {entry.candidate_status or 'n/a'}"
+            lines.append(
+                "| "
+                f"{entry.case_id} | {status_text} | {_signed_usd(entry.total_cost_usd_delta)} | "
+                f"{_signed_duration(entry.duration_seconds_delta)} | "
+                f"{_signed_optional_int(entry.findings_count_delta)} | "
+                f"{_signed_optional_int(entry.recommendations_count_delta)} | "
+                f"{'yes' if entry.patch_generated_changed else 'no'} |"
+            )
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -917,6 +1004,12 @@ def _signed_duration(value: float | None) -> str:
 
 
 def _signed_int(value: int) -> str:
+    return f"{value:+d}"
+
+
+def _signed_optional_int(value: int | None) -> str:
+    if value is None:
+        return "n/a"
     return f"{value:+d}"
 
 

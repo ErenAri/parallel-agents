@@ -404,6 +404,135 @@ def test_compare_productivity_snapshots_returns_expected_deltas(tmp_path):
         ).model_dump_json(indent=2),
         encoding="utf-8",
     )
+    (metrics_dir / "baseline-breakdown.json").write_text(
+        EvaluationBreakdown(
+            by_project=[
+                EvaluationBreakdownBucket(
+                    key="C:/repo-a",
+                    case_count=3,
+                    completed_count=3,
+                    failed_count=0,
+                    parse_error_count=0,
+                    worker_error_count=0,
+                    total_cost_usd=0.7,
+                    total_duration_seconds=60.0,
+                )
+            ],
+            by_workflow=[
+                EvaluationBreakdownBucket(
+                    key="RELEASE",
+                    case_count=2,
+                    completed_count=2,
+                    failed_count=0,
+                    parse_error_count=0,
+                    worker_error_count=0,
+                    total_cost_usd=0.4,
+                    total_duration_seconds=40.0,
+                )
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    (metrics_dir / "candidate-breakdown.json").write_text(
+        EvaluationBreakdown(
+            by_project=[
+                EvaluationBreakdownBucket(
+                    key="C:/repo-a",
+                    case_count=4,
+                    completed_count=3,
+                    failed_count=1,
+                    parse_error_count=0,
+                    worker_error_count=0,
+                    total_cost_usd=1.0,
+                    total_duration_seconds=78.0,
+                )
+            ],
+            by_workflow=[
+                EvaluationBreakdownBucket(
+                    key="RELEASE",
+                    case_count=3,
+                    completed_count=2,
+                    failed_count=1,
+                    parse_error_count=0,
+                    worker_error_count=0,
+                    total_cost_usd=0.8,
+                    total_duration_seconds=62.0,
+                )
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    now = datetime.now(timezone.utc)
+    (metrics_dir / "baseline-results.json").write_text(
+        EvaluationResults(
+            dataset_name="baseline",
+            dataset_path="baseline.json",
+            runs=[
+                EvaluationRunRecord(
+                    case_id="release-01",
+                    task="a",
+                    started_at=now,
+                    completed_at=now,
+                    duration_seconds=20.0,
+                    status="success",
+                    summary="ok",
+                    patch_generated=True,
+                    findings_count=2,
+                    recommendations_count=1,
+                    total_cost_usd=0.2,
+                ),
+                EvaluationRunRecord(
+                    case_id="release-02",
+                    task="b",
+                    started_at=now,
+                    completed_at=now,
+                    duration_seconds=30.0,
+                    status="success",
+                    summary="ok",
+                    patch_generated=False,
+                    findings_count=1,
+                    recommendations_count=1,
+                    total_cost_usd=0.3,
+                ),
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    (metrics_dir / "candidate-results.json").write_text(
+        EvaluationResults(
+            dataset_name="candidate",
+            dataset_path="candidate.json",
+            runs=[
+                EvaluationRunRecord(
+                    case_id="release-01",
+                    task="a",
+                    started_at=now,
+                    completed_at=now,
+                    duration_seconds=25.0,
+                    status="success",
+                    summary="ok",
+                    patch_generated=False,
+                    findings_count=3,
+                    recommendations_count=2,
+                    total_cost_usd=0.25,
+                ),
+                EvaluationRunRecord(
+                    case_id="release-02",
+                    task="b",
+                    started_at=now,
+                    completed_at=now,
+                    duration_seconds=40.0,
+                    status="runtime_error",
+                    summary="failed",
+                    patch_generated=False,
+                    findings_count=0,
+                    recommendations_count=0,
+                    total_cost_usd=0.35,
+                ),
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
 
     comparison = service.compare_productivity_snapshots(
         baseline_score_path=baseline_path,
@@ -421,3 +550,10 @@ def test_compare_productivity_snapshots_returns_expected_deltas(tmp_path):
     assert comparison.total_duration_seconds_delta == pytest.approx(30.0)
     assert comparison.baseline_gate_passed is True
     assert comparison.candidate_gate_passed is False
+    assert comparison.top_workflow_deltas
+    assert comparison.top_workflow_deltas[0].key == "RELEASE"
+    assert comparison.top_workflow_deltas[0].failed_count_delta == 1
+    assert comparison.top_project_deltas
+    assert comparison.top_project_deltas[0].key == "C:/repo-a"
+    assert comparison.case_changes
+    assert comparison.case_changes[0].case_id in {"release-01", "release-02"}

@@ -158,6 +158,30 @@ class ProductivityComparison:
     case_count_delta: int
     total_cost_usd_delta: float | None
     total_duration_seconds_delta: float | None
+    top_workflow_deltas: list["BucketDelta"] = field(default_factory=list)
+    top_project_deltas: list["BucketDelta"] = field(default_factory=list)
+    case_changes: list["CaseDelta"] = field(default_factory=list)
+
+
+@dataclass
+class BucketDelta:
+    key: str
+    case_count_delta: int
+    failed_count_delta: int
+    total_cost_usd_delta: float
+    total_duration_seconds_delta: float
+
+
+@dataclass
+class CaseDelta:
+    case_id: str
+    baseline_status: str | None
+    candidate_status: str | None
+    duration_seconds_delta: float | None
+    total_cost_usd_delta: float | None
+    findings_count_delta: int | None
+    recommendations_count_delta: int | None
+    patch_generated_changed: bool
 
 
 @dataclass
@@ -742,6 +766,10 @@ class EngineService:
 
         baseline_gate = self._load_related_gate(baseline_path)
         candidate_gate = self._load_related_gate(candidate_path)
+        baseline_breakdown = self._load_related_breakdown(baseline_path)
+        candidate_breakdown = self._load_related_breakdown(candidate_path)
+        baseline_results = self._load_related_results(baseline_path)
+        candidate_results = self._load_related_results(candidate_path)
 
         baseline_cost = (
             baseline_gate.aggregate.total_cost_usd if baseline_gate is not None else None
@@ -758,6 +786,18 @@ class EngineService:
             candidate_gate.aggregate.total_duration_seconds
             if candidate_gate is not None
             else None
+        )
+        workflow_deltas = self._compute_bucket_deltas(
+            baseline_breakdown.by_workflow if baseline_breakdown is not None else [],
+            candidate_breakdown.by_workflow if candidate_breakdown is not None else [],
+        )
+        project_deltas = self._compute_bucket_deltas(
+            baseline_breakdown.by_project if baseline_breakdown is not None else [],
+            candidate_breakdown.by_project if candidate_breakdown is not None else [],
+        )
+        case_changes = self._compute_case_deltas(
+            baseline_results,
+            candidate_results,
         )
 
         return ProductivityComparison(
@@ -796,6 +836,9 @@ class EngineService:
             total_duration_seconds_delta=_metric_delta(
                 candidate_duration, baseline_duration
             ),
+            top_workflow_deltas=workflow_deltas[:6],
+            top_project_deltas=project_deltas[:6],
+            case_changes=case_changes[:12],
         )
 
     def latest_run_id(self) -> str | None:
@@ -1169,6 +1212,19 @@ class EngineService:
                 return breakdown
         return None
 
+    def _load_related_results(self, score_path: Path) -> EvaluationResults | None:
+        candidates = [
+            score_path.with_name(score_path.name.replace("score", "results")),
+            score_path.with_name(score_path.name.replace("Score", "Results")),
+            score_path.parent / "eval-results.json",
+            score_path.parent / "results.json",
+        ]
+        for candidate in candidates:
+            results = self._load_model(candidate, EvaluationResults)
+            if results is not None:
+                return results
+        return None
+
     @staticmethod
     def _bucket_map(
         buckets: list[EvaluationBreakdownBucket],
@@ -1182,6 +1238,115 @@ class EngineService:
                 total_duration_seconds=bucket.total_duration_seconds,
             )
         return mapped
+
+    @staticmethod
+    def _compute_bucket_deltas(
+        baseline: list[EvaluationBreakdownBucket],
+        candidate: list[EvaluationBreakdownBucket],
+    ) -> list[BucketDelta]:
+        baseline_map = {entry.key: entry for entry in baseline}
+        candidate_map = {entry.key: entry for entry in candidate}
+        keys = sorted(set(baseline_map) | set(candidate_map))
+        deltas: list[BucketDelta] = []
+        for key in keys:
+            b = baseline_map.get(key)
+            c = candidate_map.get(key)
+            b_case = b.case_count if b is not None else 0
+            c_case = c.case_count if c is not None else 0
+            b_failed = b.failed_count if b is not None else 0
+            c_failed = c.failed_count if c is not None else 0
+            b_cost = b.total_cost_usd if b is not None else 0.0
+            c_cost = c.total_cost_usd if c is not None else 0.0
+            b_duration = b.total_duration_seconds if b is not None else 0.0
+            c_duration = c.total_duration_seconds if c is not None else 0.0
+            delta = BucketDelta(
+                key=key,
+                case_count_delta=(c_case - b_case),
+                failed_count_delta=(c_failed - b_failed),
+                total_cost_usd_delta=(c_cost - b_cost),
+                total_duration_seconds_delta=(c_duration - b_duration),
+            )
+            deltas.append(delta)
+        deltas.sort(
+            key=lambda entry: (
+                abs(entry.total_cost_usd_delta)
+                + abs(entry.total_duration_seconds_delta) / 60.0
+                + abs(entry.failed_count_delta) * 2
+                + abs(entry.case_count_delta)
+            ),
+            reverse=True,
+        )
+        return deltas
+
+    @staticmethod
+    def _compute_case_deltas(
+        baseline: EvaluationResults | None,
+        candidate: EvaluationResults | None,
+    ) -> list[CaseDelta]:
+        if baseline is None or candidate is None:
+            return []
+        baseline_map = {entry.case_id: entry for entry in baseline.runs}
+        candidate_map = {entry.case_id: entry for entry in candidate.runs}
+        keys = sorted(set(baseline_map) | set(candidate_map))
+        changes: list[CaseDelta] = []
+        for case_id in keys:
+            b = baseline_map.get(case_id)
+            c = candidate_map.get(case_id)
+            baseline_status = b.status if b is not None else None
+            candidate_status = c.status if c is not None else None
+            duration_delta = None
+            if b is not None and c is not None:
+                duration_delta = c.duration_seconds - b.duration_seconds
+            cost_delta = None
+            if b is not None and c is not None:
+                cost_delta = c.total_cost_usd - b.total_cost_usd
+            findings_delta = None
+            if b is not None and c is not None:
+                findings_delta = c.findings_count - b.findings_count
+            recs_delta = None
+            if b is not None and c is not None:
+                recs_delta = c.recommendations_count - b.recommendations_count
+            patch_changed = (
+                b is not None and c is not None and b.patch_generated != c.patch_generated
+            )
+
+            status_changed = baseline_status != candidate_status
+            if not status_changed and duration_delta is None and cost_delta is None and not patch_changed:
+                continue
+            if (
+                not status_changed
+                and abs(duration_delta or 0.0) < 0.001
+                and abs(cost_delta or 0.0) < 0.000001
+                and not patch_changed
+                and (findings_delta or 0) == 0
+                and (recs_delta or 0) == 0
+            ):
+                continue
+
+            changes.append(
+                CaseDelta(
+                    case_id=case_id,
+                    baseline_status=baseline_status,
+                    candidate_status=candidate_status,
+                    duration_seconds_delta=duration_delta,
+                    total_cost_usd_delta=cost_delta,
+                    findings_count_delta=findings_delta,
+                    recommendations_count_delta=recs_delta,
+                    patch_generated_changed=patch_changed,
+                )
+            )
+
+        changes.sort(
+            key=lambda entry: (
+                1 if entry.baseline_status != entry.candidate_status else 0,
+                abs(entry.total_cost_usd_delta or 0.0)
+                + abs(entry.duration_seconds_delta or 0.0) / 60.0
+                + abs(entry.findings_count_delta or 0)
+                + abs(entry.recommendations_count_delta or 0),
+            ),
+            reverse=True,
+        )
+        return changes
 
 
 def _stat_iso(path: Path) -> str:
