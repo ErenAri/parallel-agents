@@ -1,0 +1,10 @@
+[
+  {
+    "case_id": "SEC-001",
+    "pr_url": "https://github.com/your-org/your-repo/pull/101"
+  },
+  {
+    "case_id": "TEST-001",
+    "pr_url": "https://github.com/your-org/your-repo/pull/102"
+  }
+]

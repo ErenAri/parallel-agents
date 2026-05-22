@@ -18,13 +18,23 @@ from rich.text import Text
 
 from parallel_agents.config import PipelineConfig
 from parallel_agents.eval_harness import (
+    EvaluationAnnotationUpdate,
+    apply_evaluation_annotations,
+    compare_evaluation_results,
+    compute_evaluation_breakdown,
     compute_evaluation_score,
+    evaluate_score_gate,
     load_evaluation_dataset,
     load_evaluation_results,
+    render_evaluation_breakdown_report,
+    render_evaluation_comparison_report,
     render_evaluation_report,
     run_evaluation,
+    save_evaluation_comparison,
+    save_evaluation_gate_result,
     save_evaluation_results,
     save_evaluation_score,
+    summarize_evaluation_results,
 )
 from parallel_agents.company_workflows import (
     RoadmapPlan,
@@ -69,6 +79,7 @@ from parallel_agents.tools.github_apply import (
     issue_field as _issue_field,
 )
 from parallel_agents.tools.github_tools import (
+    fetch_pull_request,
     parse_repo_ref,
 )
 
@@ -460,6 +471,343 @@ def eval_run(
     )
 
 
+class _EvaluationPrLink(BaseModel):
+    case_id: str
+    pr_url: str
+
+
+class _EvaluationCiOutcome(BaseModel):
+    case_id: str
+    ci_passed: bool
+    source: str | None = None
+
+
+@eval_group.command(name="annotate")
+@click.option(
+    "--results",
+    "results_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to evaluation results JSON.",
+)
+@click.option(
+    "--annotations",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to annotation update JSON list.",
+)
+@click.option(
+    "--output",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Output path for annotated results JSON. Defaults to --results when --in-place is set.",
+)
+@click.option("--in-place/--no-in-place", default=False, help="Write updates back to the input results file.")
+@click.option("--strict/--no-strict", default=True, help="Fail when annotation case IDs are missing from results.")
+def eval_annotate(
+    results_path: Path,
+    annotations: Path,
+    output: Path | None,
+    in_place: bool,
+    strict: bool,
+) -> None:
+    """Apply acceptance/regression/finding annotations to evaluation results."""
+    if output and in_place:
+        raise click.UsageError("Use either --output or --in-place, not both.")
+    if not output and not in_place:
+        raise click.UsageError("Provide --output or use --in-place.")
+
+    raw = json.loads(annotations.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise click.UsageError("Annotation file must be a JSON list of per-case updates.")
+
+    updates = [EvaluationAnnotationUpdate.model_validate(item) for item in raw]
+    results = load_evaluation_results(results_path)
+    try:
+        annotated = apply_evaluation_annotations(results, updates, strict=strict)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    target = results_path if in_place else output
+    assert target is not None
+    save_evaluation_results(target, annotated)
+    console.print(f"[green]Annotated evaluation results written to {target}[/green]")
+
+
+@eval_group.command(name="sync-pr")
+@click.option(
+    "--results",
+    "results_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to evaluation results JSON.",
+)
+@click.option(
+    "--links",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON list with case_id/pr_url mappings.",
+)
+@click.option(
+    "--output",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Output path for synced results JSON. Defaults to --results when --in-place is set.",
+)
+@click.option("--in-place/--no-in-place", default=False, help="Write updates back to the input results file.")
+@click.option("--strict/--no-strict", default=True, help="Fail on unknown case IDs or PR fetch errors.")
+@click.option(
+    "--include-closed-unmerged/--no-include-closed-unmerged",
+    default=False,
+    help="Mark closed-but-unmerged PRs as not accepted.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print sync summary as JSON.")
+def eval_sync_pr(
+    results_path: Path,
+    links: Path,
+    output: Path | None,
+    in_place: bool,
+    strict: bool,
+    include_closed_unmerged: bool,
+    json_output: bool,
+) -> None:
+    """Sync acceptance annotations from GitHub PR state/review decisions."""
+    if output and in_place:
+        raise click.UsageError("Use either --output or --in-place, not both.")
+    if not output and not in_place:
+        raise click.UsageError("Provide --output or use --in-place.")
+
+    raw = json.loads(links.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise click.UsageError("Links file must be a JSON list of case_id/pr_url entries.")
+    link_entries = [_EvaluationPrLink.model_validate(item) for item in raw]
+
+    async def _fetch_all() -> list[Any]:
+        return await asyncio.gather(*(fetch_pull_request(item.pr_url) for item in link_entries))
+
+    pr_payloads = asyncio.run(_fetch_all())
+    updates: list[EvaluationAnnotationUpdate] = []
+    sync_rows: list[dict[str, Any]] = []
+    fetch_failures = 0
+
+    for link_entry, pr in zip(link_entries, pr_payloads):
+        if pr is None:
+            fetch_failures += 1
+            sync_rows.append(
+                {
+                    "case_id": link_entry.case_id,
+                    "pr_url": link_entry.pr_url,
+                    "status": "fetch_failed",
+                    "accepted_without_major_edits": None,
+                    "reason": "failed_to_fetch_pr",
+                }
+            )
+            continue
+
+        merged = bool(pr.merged_at)
+        if merged:
+            accepted = (
+                str(pr.review_decision or "").upper() == "APPROVED"
+                and pr.changes_requested_count == 0
+            )
+            updates.append(
+                EvaluationAnnotationUpdate(
+                    case_id=link_entry.case_id,
+                    accepted_without_major_edits=accepted,
+                )
+            )
+            sync_rows.append(
+                {
+                    "case_id": link_entry.case_id,
+                    "pr_url": link_entry.pr_url,
+                    "status": "updated",
+                    "accepted_without_major_edits": accepted,
+                    "reason": "merged_pr",
+                    "review_decision": pr.review_decision,
+                    "changes_requested_count": pr.changes_requested_count,
+                    "approved_count": pr.approved_count,
+                    "merged_at": pr.merged_at,
+                }
+            )
+            continue
+
+        if include_closed_unmerged and str(pr.state).upper() == "CLOSED":
+            updates.append(
+                EvaluationAnnotationUpdate(
+                    case_id=link_entry.case_id,
+                    accepted_without_major_edits=False,
+                )
+            )
+            sync_rows.append(
+                {
+                    "case_id": link_entry.case_id,
+                    "pr_url": link_entry.pr_url,
+                    "status": "updated",
+                    "accepted_without_major_edits": False,
+                    "reason": "closed_unmerged_pr",
+                    "review_decision": pr.review_decision,
+                    "changes_requested_count": pr.changes_requested_count,
+                    "approved_count": pr.approved_count,
+                    "merged_at": pr.merged_at,
+                }
+            )
+            continue
+
+        sync_rows.append(
+            {
+                "case_id": link_entry.case_id,
+                "pr_url": link_entry.pr_url,
+                "status": "skipped",
+                "accepted_without_major_edits": None,
+                "reason": "pr_not_merged",
+                "review_decision": pr.review_decision,
+                "changes_requested_count": pr.changes_requested_count,
+                "approved_count": pr.approved_count,
+                "merged_at": pr.merged_at,
+            }
+        )
+
+    if strict and fetch_failures > 0:
+        click.echo("PR sync failed due to one or more PR fetch errors.", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    results = load_evaluation_results(results_path)
+    try:
+        synced = apply_evaluation_annotations(results, updates, strict=strict)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    target = results_path if in_place else output
+    assert target is not None
+    save_evaluation_results(target, synced)
+
+    summary = {
+        "updated_results_path": str(target),
+        "links_count": len(link_entries),
+        "updates_applied": len(updates),
+        "fetch_failures": fetch_failures,
+        "rows": sync_rows,
+    }
+
+    if json_output:
+        click.echo(json.dumps(summary, indent=2, default=str))
+    else:
+        table = Table(title="PR Acceptance Sync")
+        table.add_column("Case")
+        table.add_column("Status")
+        table.add_column("Accepted", justify="center")
+        table.add_column("Reason")
+        for row in sync_rows:
+            accepted = row["accepted_without_major_edits"]
+            accepted_text = "yes" if accepted is True else ("no" if accepted is False else "n/a")
+            table.add_row(
+                str(row["case_id"]),
+                str(row["status"]),
+                accepted_text,
+                str(row["reason"]),
+            )
+        console.print(table)
+        console.print(f"[green]Synced evaluation results written to {target}[/green]")
+
+
+@eval_group.command(name="sync-ci")
+@click.option(
+    "--results",
+    "results_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to evaluation results JSON.",
+)
+@click.option(
+    "--outcomes",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON list with case_id/ci_passed outcomes.",
+)
+@click.option(
+    "--output",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Output path for synced results JSON. Defaults to --results when --in-place is set.",
+)
+@click.option("--in-place/--no-in-place", default=False, help="Write updates back to the input results file.")
+@click.option("--strict/--no-strict", default=True, help="Fail when outcomes reference unknown case IDs.")
+@click.option("--json-output/--no-json-output", default=False, help="Print sync summary as JSON.")
+def eval_sync_ci(
+    results_path: Path,
+    outcomes: Path,
+    output: Path | None,
+    in_place: bool,
+    strict: bool,
+    json_output: bool,
+) -> None:
+    """Sync regression annotations from CI pass/fail outcomes."""
+    if output and in_place:
+        raise click.UsageError("Use either --output or --in-place, not both.")
+    if not output and not in_place:
+        raise click.UsageError("Provide --output or use --in-place.")
+
+    raw = json.loads(outcomes.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise click.UsageError("Outcomes file must be a JSON list of case_id/ci_passed entries.")
+    outcome_entries = [_EvaluationCiOutcome.model_validate(item) for item in raw]
+
+    updates = [
+        EvaluationAnnotationUpdate(
+            case_id=entry.case_id,
+            introduced_regression=not entry.ci_passed,
+        )
+        for entry in outcome_entries
+    ]
+
+    results = load_evaluation_results(results_path)
+    try:
+        synced = apply_evaluation_annotations(results, updates, strict=strict)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    target = results_path if in_place else output
+    assert target is not None
+    save_evaluation_results(target, synced)
+
+    rows = [
+        {
+            "case_id": entry.case_id,
+            "ci_passed": entry.ci_passed,
+            "introduced_regression": (not entry.ci_passed),
+            "source": entry.source or "",
+        }
+        for entry in outcome_entries
+    ]
+    summary = {
+        "updated_results_path": str(target),
+        "outcomes_count": len(outcome_entries),
+        "updates_applied": len(updates),
+        "rows": rows,
+    }
+
+    if json_output:
+        click.echo(json.dumps(summary, indent=2, default=str))
+    else:
+        table = Table(title="CI Regression Sync")
+        table.add_column("Case")
+        table.add_column("CI Passed")
+        table.add_column("Introduced Regression")
+        table.add_column("Source")
+        for row in rows:
+            table.add_row(
+                str(row["case_id"]),
+                "yes" if row["ci_passed"] else "no",
+                "yes" if row["introduced_regression"] else "no",
+                str(row["source"]),
+            )
+        console.print(table)
+        console.print(f"[green]Synced evaluation results written to {target}[/green]")
+
+
 @eval_group.command(name="score")
 @click.option(
     "--results",
@@ -523,6 +871,258 @@ def eval_score(
         console.print(f"[green]Markdown report written to {output_report}[/green]")
     if output_json:
         console.print(f"[green]Score JSON written to {output_json}[/green]")
+
+
+@eval_group.command(name="compare")
+@click.option(
+    "--baseline-results",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Baseline evaluation results JSON.",
+)
+@click.option(
+    "--candidate-results",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Candidate evaluation results JSON.",
+)
+@click.option(
+    "--output-json",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Optional path to save comparison JSON.",
+)
+@click.option(
+    "--output-report",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Optional path to save comparison Markdown report.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print comparison JSON to stdout.")
+def eval_compare(
+    baseline_results: Path,
+    candidate_results: Path,
+    output_json: Path | None,
+    output_report: Path | None,
+    json_output: bool,
+) -> None:
+    """Compare baseline and candidate evaluation runs."""
+    baseline = load_evaluation_results(baseline_results)
+    candidate = load_evaluation_results(candidate_results)
+    comparison = compare_evaluation_results(
+        baseline,
+        candidate,
+        baseline_results_path=str(baseline_results),
+        candidate_results_path=str(candidate_results),
+    )
+
+    if output_json:
+        save_evaluation_comparison(output_json, comparison)
+
+    report = render_evaluation_comparison_report(comparison)
+    if output_report:
+        output_report.parent.mkdir(parents=True, exist_ok=True)
+        output_report.write_text(report, encoding="utf-8")
+
+    if json_output:
+        click.echo(json.dumps(comparison.model_dump(mode="json"), indent=2, default=str))
+        return
+
+    table = Table(title="Evaluation Comparison")
+    table.add_column("Metric")
+    table.add_column("Candidate - Baseline", justify="right")
+    table.add_row("Speed Gain (median)", _fmt_percent(comparison.speed_gain_median_delta))
+    table.add_row("Acceptance Rate", _fmt_percent(comparison.acceptance_rate_delta))
+    table.add_row("Regression Rate", _fmt_percent(comparison.regression_rate_delta))
+    table.add_row("Finding Precision", _fmt_percent(comparison.finding_precision_delta))
+    table.add_row(
+        "Weighted Delivery Impact",
+        _fmt_percent(comparison.weighted_delivery_impact_delta),
+    )
+    table.add_row("Completed Cases", f"{comparison.completed_count_delta:+d}")
+    table.add_row("Failed Cases", f"{comparison.failed_count_delta:+d}")
+    table.add_row("Total Cost (USD)", f"{comparison.total_cost_usd_delta:+.4f}")
+    table.add_row("Total Duration (s)", f"{comparison.total_duration_seconds_delta:+.1f}")
+    console.print(table)
+
+    if output_report:
+        console.print(f"[green]Comparison report written to {output_report}[/green]")
+    if output_json:
+        console.print(f"[green]Comparison JSON written to {output_json}[/green]")
+
+
+@eval_group.command(name="breakdown")
+@click.option(
+    "--results",
+    "results_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to evaluation results JSON.",
+)
+@click.option(
+    "--output-report",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Optional path to save breakdown Markdown report.",
+)
+@click.option(
+    "--output-json",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Optional path to save breakdown JSON.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print breakdown as JSON.")
+def eval_breakdown(
+    results_path: Path,
+    output_report: Path | None,
+    output_json: Path | None,
+    json_output: bool,
+) -> None:
+    """Show cost/time breakdown by project and workflow."""
+    results = load_evaluation_results(results_path)
+    breakdown = compute_evaluation_breakdown(results)
+
+    if output_json:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(
+            json.dumps(breakdown.model_dump(mode="json"), indent=2, default=str),
+            encoding="utf-8",
+        )
+
+    if output_report:
+        output_report.parent.mkdir(parents=True, exist_ok=True)
+        output_report.write_text(
+            render_evaluation_breakdown_report(breakdown),
+            encoding="utf-8",
+        )
+
+    if json_output:
+        click.echo(json.dumps(breakdown.model_dump(mode="json"), indent=2, default=str))
+        return
+
+    project_table = Table(title="Evaluation Breakdown: By Project")
+    project_table.add_column("Project")
+    project_table.add_column("Cases", justify="right")
+    project_table.add_column("Cost (USD)", justify="right")
+    project_table.add_column("Duration (s)", justify="right")
+    for bucket in breakdown.by_project:
+        project_table.add_row(
+            bucket.key,
+            str(bucket.case_count),
+            f"{bucket.total_cost_usd:.4f}",
+            f"{bucket.total_duration_seconds:.1f}",
+        )
+    console.print(project_table)
+
+    workflow_table = Table(title="Evaluation Breakdown: By Workflow")
+    workflow_table.add_column("Workflow")
+    workflow_table.add_column("Cases", justify="right")
+    workflow_table.add_column("Cost (USD)", justify="right")
+    workflow_table.add_column("Duration (s)", justify="right")
+    for bucket in breakdown.by_workflow:
+        workflow_table.add_row(
+            bucket.key,
+            str(bucket.case_count),
+            f"{bucket.total_cost_usd:.4f}",
+            f"{bucket.total_duration_seconds:.1f}",
+        )
+    console.print(workflow_table)
+
+    if output_report:
+        console.print(f"[green]Breakdown report written to {output_report}[/green]")
+    if output_json:
+        console.print(f"[green]Breakdown JSON written to {output_json}[/green]")
+
+
+@eval_group.command(name="gate")
+@click.option(
+    "--results",
+    "results_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to evaluation results JSON.",
+)
+@click.option("--min-weighted-impact", type=float, default=None, help="Minimum weighted delivery impact score.")
+@click.option("--max-regression-rate", type=float, default=None, help="Maximum allowed regression rate [0-1].")
+@click.option("--min-acceptance-rate", type=float, default=None, help="Minimum acceptance rate [0-1].")
+@click.option("--min-finding-precision", type=float, default=None, help="Minimum finding precision [0-1].")
+@click.option("--max-failed-count", type=int, default=None, help="Maximum allowed runtime error count.")
+@click.option("--max-total-cost-usd", type=float, default=None, help="Maximum total evaluation cost in USD.")
+@click.option(
+    "--max-total-duration-seconds",
+    type=float,
+    default=None,
+    help="Maximum total evaluation duration in seconds.",
+)
+@click.option(
+    "--output-json",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Optional path to save gate result JSON.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print gate result as JSON.")
+def eval_gate(
+    results_path: Path,
+    min_weighted_impact: float | None,
+    max_regression_rate: float | None,
+    min_acceptance_rate: float | None,
+    min_finding_precision: float | None,
+    max_failed_count: int | None,
+    max_total_cost_usd: float | None,
+    max_total_duration_seconds: float | None,
+    output_json: Path | None,
+    json_output: bool,
+) -> None:
+    """Enforce CI-style quality gates against evaluation results."""
+    _validate_probability_option("--max-regression-rate", max_regression_rate)
+    _validate_probability_option("--min-acceptance-rate", min_acceptance_rate)
+    _validate_probability_option("--min-finding-precision", min_finding_precision)
+
+    results = load_evaluation_results(results_path)
+    score = compute_evaluation_score(results)
+    aggregate = summarize_evaluation_results(results)
+    gate = evaluate_score_gate(
+        score,
+        aggregate,
+        min_weighted_delivery_impact=min_weighted_impact,
+        max_regression_rate=max_regression_rate,
+        min_acceptance_rate=min_acceptance_rate,
+        min_finding_precision=min_finding_precision,
+        max_failed_count=max_failed_count,
+        max_total_cost_usd=max_total_cost_usd,
+        max_total_duration_seconds=max_total_duration_seconds,
+    )
+
+    if output_json:
+        save_evaluation_gate_result(output_json, gate)
+
+    if json_output:
+        click.echo(json.dumps(gate.model_dump(mode="json"), indent=2, default=str))
+    else:
+        table = Table(title="Evaluation Gate")
+        table.add_column("Check")
+        table.add_column("Value", justify="right")
+        table.add_row("Passed", "yes" if gate.passed else "no")
+        table.add_row("Failed Rules", str(len(gate.failed_rules)))
+        table.add_row("Weighted Delivery Impact", _fmt_percent(score.weighted_delivery_impact_score))
+        table.add_row("Regression Rate", _fmt_percent(score.regression_rate))
+        table.add_row("Acceptance Rate", _fmt_percent(score.acceptance_rate))
+        table.add_row("Finding Precision", _fmt_percent(score.finding_precision))
+        table.add_row("Failed Cases", str(aggregate.failed_count))
+        table.add_row("Total Cost (USD)", f"{aggregate.total_cost_usd:.4f}")
+        table.add_row("Total Duration (s)", f"{aggregate.total_duration_seconds:.1f}")
+        console.print(table)
+
+        if gate.failed_rules:
+            console.print("[red]Gate failed:[/red]")
+            for rule in gate.failed_rules:
+                console.print(f"  - {rule}")
+
+    if output_json:
+        console.print(f"[green]Gate JSON written to {output_json}[/green]")
+
+    if not gate.passed:
+        sys.exit(EXIT_RUNTIME_FAILURE)
 
 
 @cli.group(name="company")
@@ -2054,6 +2654,13 @@ def _fmt_percent(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value * 100:.2f}%"
+
+
+def _validate_probability_option(name: str, value: float | None) -> None:
+    if value is None:
+        return
+    if value < 0.0 or value > 1.0:
+        raise click.BadParameter(f"{name} must be between 0 and 1.")
 
 
 def _load_model_from_json(path: Path, model_type: type[BaseModel]) -> BaseModel:

@@ -28,7 +28,13 @@ The current release line is focused on local, reviewable workflows and a project
   - branch naming and workflow templates
 - Evaluation harness:
   - benchmark dataset execution
+  - annotation merge flow for acceptance/regression/finding updates
+  - PR-linked acceptance sync (`eval sync-pr`) via GitHub PR state/review decisions
+  - CI-linked regression sync (`eval sync-ci`) via case-level pass/fail outcomes
   - scorecard generation
+  - baseline vs candidate comparison reports
+  - cost/time breakdown reports by project and workflow (`eval breakdown`)
+  - CI/release quality gates with threshold checks
   - markdown report output
 - Local gateway foundation:
   - FastAPI app behind optional dependency group

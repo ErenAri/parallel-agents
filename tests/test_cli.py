@@ -436,6 +436,344 @@ def test_eval_score_command_json_output(tmp_path):
     assert payload["weighted_delivery_impact_score"] is not None
 
 
+def test_eval_annotate_command_updates_results_in_place(tmp_path):
+    results_path = tmp_path / "results.json"
+    annotations_path = tmp_path / "annotations.json"
+    started = datetime(2026, 5, 21, 10, 0, tzinfo=timezone.utc)
+    ended = datetime(2026, 5, 21, 10, 10, tzinfo=timezone.utc)
+
+    data = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(results_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="c1",
+                task="task",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended,
+                duration_seconds=600,
+                status="success",
+                summary="ok",
+            )
+        ],
+    )
+    results_path.write_text(data.model_dump_json(indent=2), encoding="utf-8")
+    annotations_path.write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "c1",
+                    "accepted_without_major_edits": True,
+                    "introduced_regression": False,
+                    "findings_true_positives": 3,
+                    "findings_false_positives": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "eval",
+            "annotate",
+            "--results",
+            str(results_path),
+            "--annotations",
+            str(annotations_path),
+            "--in-place",
+        ],
+    )
+    assert result.exit_code == 0
+
+    updated = json.loads(results_path.read_text(encoding="utf-8"))
+    annotations_payload = updated["runs"][0]["annotations"]
+    assert annotations_payload["accepted_without_major_edits"] is True
+    assert annotations_payload["introduced_regression"] is False
+    assert annotations_payload["findings_true_positives"] == 3
+
+
+def test_eval_sync_pr_updates_acceptance_annotation(monkeypatch, tmp_path):
+    results_path = tmp_path / "results.json"
+    links_path = tmp_path / "pr-links.json"
+    started = datetime(2026, 5, 21, 10, 0, tzinfo=timezone.utc)
+    ended = datetime(2026, 5, 21, 10, 10, tzinfo=timezone.utc)
+
+    data = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(results_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="c1",
+                task="task",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended,
+                duration_seconds=600,
+                status="success",
+                summary="ok",
+            )
+        ],
+    )
+    results_path.write_text(data.model_dump_json(indent=2), encoding="utf-8")
+    links_path.write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "c1",
+                    "pr_url": "https://github.com/owner/repo/pull/10",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakePr:
+        merged_at = "2026-05-22T12:00:00Z"
+        review_decision = "APPROVED"
+        changes_requested_count = 0
+        approved_count = 1
+        state = "MERGED"
+
+    async def fake_fetch_pull_request(url: str):
+        assert url.endswith("/pull/10")
+        return FakePr()
+
+    monkeypatch.setattr(main_module, "fetch_pull_request", fake_fetch_pull_request)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "eval",
+            "sync-pr",
+            "--results",
+            str(results_path),
+            "--links",
+            str(links_path),
+            "--in-place",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    annotations_payload = payload["runs"][0]["annotations"]
+    assert annotations_payload["accepted_without_major_edits"] is True
+
+
+def test_eval_sync_ci_updates_regression_annotation(tmp_path):
+    results_path = tmp_path / "results.json"
+    outcomes_path = tmp_path / "ci-outcomes.json"
+    started = datetime(2026, 5, 21, 10, 0, tzinfo=timezone.utc)
+    ended = datetime(2026, 5, 21, 10, 10, tzinfo=timezone.utc)
+
+    data = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(results_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="c1",
+                task="task",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended,
+                duration_seconds=600,
+                status="success",
+                summary="ok",
+            )
+        ],
+    )
+    results_path.write_text(data.model_dump_json(indent=2), encoding="utf-8")
+    outcomes_path.write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "c1",
+                    "ci_passed": False,
+                    "source": "github-actions",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "eval",
+            "sync-ci",
+            "--results",
+            str(results_path),
+            "--outcomes",
+            str(outcomes_path),
+            "--in-place",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    annotations_payload = payload["runs"][0]["annotations"]
+    assert annotations_payload["introduced_regression"] is True
+
+
+def test_eval_breakdown_command_json_output(tmp_path):
+    results_path = tmp_path / "results.json"
+    started = datetime(2026, 5, 21, 10, 0, tzinfo=timezone.utc)
+    ended = datetime(2026, 5, 21, 10, 10, tzinfo=timezone.utc)
+    data = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(results_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="SEC-001",
+                task="task",
+                repo_path="/repo-a",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended,
+                duration_seconds=600,
+                status="success",
+                summary="ok",
+                total_cost_usd=0.15,
+            )
+        ],
+    )
+    results_path.write_text(data.model_dump_json(indent=2), encoding="utf-8")
+
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["eval", "breakdown", "--results", str(results_path), "--json-output"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["by_project"][0]["key"] == "/repo-a"
+    assert payload["by_workflow"][0]["key"] == "SEC"
+
+
+def test_eval_compare_command_json_output(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    candidate_path = tmp_path / "candidate.json"
+    started = datetime(2026, 5, 21, 10, 0, tzinfo=timezone.utc)
+    ended_short = datetime(2026, 5, 21, 10, 10, tzinfo=timezone.utc)
+    ended_long = datetime(2026, 5, 21, 10, 20, tzinfo=timezone.utc)
+
+    baseline = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(baseline_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="c1",
+                task="task",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended_short,
+                duration_seconds=600,
+                status="success",
+                summary="ok",
+                total_cost_usd=0.20,
+                annotations=EvaluationAnnotations(
+                    accepted_without_major_edits=True,
+                    introduced_regression=False,
+                    findings_true_positives=2,
+                    findings_false_positives=1,
+                ),
+            )
+        ],
+    )
+    candidate = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(candidate_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="c1",
+                task="task",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended_long,
+                duration_seconds=1200,
+                status="success",
+                summary="ok",
+                total_cost_usd=0.25,
+                annotations=EvaluationAnnotations(
+                    accepted_without_major_edits=False,
+                    introduced_regression=True,
+                    findings_true_positives=1,
+                    findings_false_positives=2,
+                ),
+            )
+        ],
+    )
+    baseline_path.write_text(baseline.model_dump_json(indent=2), encoding="utf-8")
+    candidate_path.write_text(candidate.model_dump_json(indent=2), encoding="utf-8")
+
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "eval",
+            "compare",
+            "--baseline-results",
+            str(baseline_path),
+            "--candidate-results",
+            str(candidate_path),
+            "--json-output",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["total_duration_seconds_delta"] == 600
+    assert payload["failed_count_delta"] == 0
+
+
+def test_eval_gate_command_fails_when_thresholds_not_met(tmp_path):
+    results_path = tmp_path / "results.json"
+    started = datetime(2026, 5, 21, 10, 0, tzinfo=timezone.utc)
+    ended = datetime(2026, 5, 21, 10, 20, tzinfo=timezone.utc)
+
+    data = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(results_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="c1",
+                task="task",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended,
+                duration_seconds=1200,
+                status="success",
+                summary="ok",
+                annotations=EvaluationAnnotations(
+                    accepted_without_major_edits=False,
+                    introduced_regression=True,
+                    findings_true_positives=1,
+                    findings_false_positives=3,
+                ),
+            )
+        ],
+    )
+    results_path.write_text(data.model_dump_json(indent=2), encoding="utf-8")
+
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "eval",
+            "gate",
+            "--results",
+            str(results_path),
+            "--max-regression-rate",
+            "0.1",
+            "--min-acceptance-rate",
+            "0.8",
+        ],
+    )
+    assert result.exit_code == main_module.EXIT_RUNTIME_FAILURE
+    assert "Gate failed" in result.output
+
+
 def test_company_idea_command_json_output():
     runner = _runner()
     result = runner.invoke(

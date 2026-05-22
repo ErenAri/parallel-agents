@@ -9,10 +9,13 @@ import pytest
 
 from parallel_agents.tools.github_tools import (
     GitHubIssue,
+    GitHubPullRequest,
     create_issue,
     ensure_milestone,
     fetch_issue,
+    fetch_pull_request,
     parse_github_url,
+    parse_pr_url,
     parse_repo_ref,
 )
 
@@ -52,6 +55,14 @@ class TestParseRepoRef:
 
     def test_invalid(self):
         assert parse_repo_ref("gitlab.com/owner/repo") is None
+
+
+class TestParsePrUrl:
+    def test_valid_pr_url(self):
+        assert parse_pr_url("https://github.com/owner/repo/pull/42") == ("owner", "repo", 42)
+
+    def test_invalid_pr_url(self):
+        assert parse_pr_url("https://github.com/owner/repo/issues/42") is None
 
 
 class TestFetchIssue:
@@ -136,3 +147,43 @@ class TestMilestonesAndIssues:
                     labels=["planning", "ai"],
                 )
         assert url == "https://github.com/owner/repo/issues/99"
+
+
+class TestFetchPullRequest:
+    @pytest.mark.asyncio
+    async def test_fetch_pull_request_happy_path(self):
+        payload = {
+            "number": 7,
+            "title": "Improve CI reliability",
+            "state": "MERGED",
+            "url": "https://github.com/owner/repo/pull/7",
+            "mergedAt": "2026-05-22T09:30:00Z",
+            "reviewDecision": "APPROVED",
+            "reviews": [
+                {"state": "APPROVED"},
+                {"state": "COMMENTED"},
+            ],
+            "changedFiles": 5,
+            "additions": 120,
+            "deletions": 30,
+        }
+        with patch("parallel_agents.tools.github_tools._gh_available", return_value=True):
+            with patch(
+                "parallel_agents.tools.github_tools._run_gh",
+                new=AsyncMock(return_value=(json.dumps(payload), 0)),
+            ):
+                pr = await fetch_pull_request("https://github.com/owner/repo/pull/7")
+
+        assert isinstance(pr, GitHubPullRequest)
+        assert pr is not None
+        assert pr.number == 7
+        assert pr.state == "MERGED"
+        assert pr.approved_count == 1
+        assert pr.changes_requested_count == 0
+        assert pr.changed_files == 5
+
+    @pytest.mark.asyncio
+    async def test_fetch_pull_request_returns_none_when_invalid_url(self):
+        with patch("parallel_agents.tools.github_tools._gh_available", return_value=True):
+            pr = await fetch_pull_request("https://github.com/owner/repo/issues/7")
+        assert pr is None

@@ -1,0 +1,51 @@
+{
+  "name": "public-benchmark-v1",
+  "baseline_acceptance_rate": 0.6,
+  "baseline_regression_rate": 0.08,
+  "cases": [
+    {
+      "id": "SEC-001",
+      "task": "Review authentication and session middleware for vulnerabilities.",
+      "repo_path": ".",
+      "baseline_human_minutes": 90,
+      "tags": [
+        "security",
+        "middleware"
+      ],
+      "notes": "Focus on missing validation and secret handling."
+    },
+    {
+      "id": "TEST-001",
+      "task": "Identify missing high-value tests for API error handling and edge cases.",
+      "repo_path": ".",
+      "baseline_human_minutes": 75,
+      "tags": [
+        "testing",
+        "quality"
+      ],
+      "notes": "Prefer concrete test recommendations with coverage impact."
+    },
+    {
+      "id": "PERF-001",
+      "task": "Find top performance bottlenecks and propose practical fixes.",
+      "repo_path": ".",
+      "baseline_human_minutes": 80,
+      "tags": [
+        "performance",
+        "profiling"
+      ],
+      "notes": "Prioritize issues with user-facing latency impact."
+    },
+    {
+      "id": "DX-001",
+      "task": "Review CI workflow reliability and identify flaky or slow steps.",
+      "repo_path": ".",
+      "baseline_human_minutes": 60,
+      "tags": [
+        "devops",
+        "ci"
+      ],
+      "notes": "Recommend changes with clear trade-offs."
+    }
+  ]
+}
