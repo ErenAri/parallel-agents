@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from parallel_agents.desktop._qt import (
     QHBoxLayout,
-    QMessageBox,
     QPushButton,
     QSplitter,
     Qt,

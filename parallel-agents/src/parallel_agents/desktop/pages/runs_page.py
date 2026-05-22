@@ -7,7 +7,6 @@ from parallel_agents.desktop._qt import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QVBoxLayout,
 )
 from parallel_agents.desktop.pages._base import Page
 from parallel_agents.desktop.services.engine import EngineService
