@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -91,6 +92,10 @@ class ProjectsPage(Page):
         self.trend_window = QComboBox()
         self.trend_window.addItems(["All", "7d", "30d", "90d"])
         self.trend_window.currentTextChanged.connect(self._on_trend_controls_changed)
+        self.export_csv_btn = QPushButton("Export CSV")
+        self.export_csv_btn.clicked.connect(self._export_trend_csv)
+        self.export_md_btn = QPushButton("Export Report")
+        self.export_md_btn.clicked.connect(self._export_trend_markdown)
         trend_controls.addWidget(QLabel("Slice"))
         trend_controls.addWidget(self.trend_mode)
         trend_controls.addWidget(QLabel("Metric"))
@@ -99,6 +104,8 @@ class ProjectsPage(Page):
         trend_controls.addWidget(self.trend_key, stretch=1)
         trend_controls.addWidget(QLabel("Window"))
         trend_controls.addWidget(self.trend_window)
+        trend_controls.addWidget(self.export_csv_btn)
+        trend_controls.addWidget(self.export_md_btn)
 
         self.trend_chart = QTextBrowser()
         self.trend_chart.setOpenExternalLinks(False)
@@ -347,17 +354,16 @@ class ProjectsPage(Page):
         self.trend_key.blockSignals(False)
 
     def _render_trend_chart(self, trend: list) -> None:
-        mode = self.trend_mode.currentText()
-        metric = self.trend_metric.currentText().strip() or "impact"
-        key = self.trend_key.currentText().strip() or "(all)"
-        window_label = self.trend_window.currentText().strip() or "All"
-
-        filtered = _filter_trend_window(trend, window_label)
+        ctx = self._trend_context(trend)
+        filtered = ctx["filtered"]
         if not filtered:
             self.trend_chart.setPlainText("No trend points in selected window.")
             return
-        filtered = sorted(filtered, key=lambda point: point.generated_at)
-        values = [_trend_value(point, mode, metric, key) for point in filtered]
+        mode = ctx["mode"]
+        metric = ctx["metric"]
+        key = ctx["key"]
+        window_label = ctx["window"]
+        values = ctx["values"]
         present_values = [v for v in values if v is not None]
         spark = _sparkline(present_values)
         latest_value = values[-1] if values else None
@@ -376,6 +382,147 @@ class ProjectsPage(Page):
                 f"- {point.generated_at}: {_metric_value_text(value, metric)}"
             )
         self.trend_chart.setPlainText("\n".join(chart_lines))
+
+    def _trend_context(self, trend: list) -> dict:
+        mode = self.trend_mode.currentText()
+        metric = self.trend_metric.currentText().strip() or "impact"
+        key = self.trend_key.currentText().strip() or "(all)"
+        window_label = self.trend_window.currentText().strip() or "All"
+        filtered = _filter_trend_window(trend, window_label)
+        filtered = sorted(filtered, key=lambda point: point.generated_at)
+        values = [_trend_value(point, mode, metric, key) for point in filtered]
+        return {
+            "mode": mode,
+            "metric": metric,
+            "key": key,
+            "window": window_label,
+            "filtered": filtered,
+            "values": values,
+        }
+
+    def _export_trend_csv(self) -> None:
+        if not self._trend_cache:
+            QMessageBox.information(self, "Export trend", "No trend data to export.")
+            return
+        ctx = self._trend_context(self._trend_cache)
+        if not ctx["filtered"]:
+            QMessageBox.information(
+                self,
+                "Export trend",
+                "No trend points in the selected window.",
+            )
+            return
+        project = self.engine.current_project()
+        default_dir = str((project.office_dir / "metrics").resolve()) if project else "."
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        default_path = str(
+            Path(default_dir) / f"desktop-trend-{ctx['mode'].lower()}-{ctx['metric']}-{timestamp}.csv"
+        )
+        selected, _filter_name = QFileDialog.getSaveFileName(
+            self,
+            "Export Trend CSV",
+            default_path,
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(
+                [
+                    "generated_at",
+                    "slice_mode",
+                    "metric",
+                    "slice_key",
+                    "window",
+                    "value_raw",
+                    "value_display",
+                    "gate_status",
+                    "score_path",
+                ]
+            )
+            for point, value in zip(ctx["filtered"], ctx["values"]):
+                gate_status = "n/a"
+                if point.gate_passed is True:
+                    gate_status = "pass"
+                elif point.gate_passed is False:
+                    gate_status = "fail"
+                writer.writerow(
+                    [
+                        point.generated_at,
+                        ctx["mode"],
+                        ctx["metric"],
+                        ctx["key"],
+                        ctx["window"],
+                        "" if value is None else value,
+                        _metric_value_text(value, ctx["metric"]),
+                        gate_status,
+                        str(point.score_path),
+                    ]
+                )
+        QMessageBox.information(self, "Export trend", f"CSV saved:\n{path}")
+
+    def _export_trend_markdown(self) -> None:
+        if not self._trend_cache:
+            QMessageBox.information(self, "Export report", "No trend data to export.")
+            return
+        ctx = self._trend_context(self._trend_cache)
+        if not ctx["filtered"]:
+            QMessageBox.information(
+                self,
+                "Export report",
+                "No trend points in the selected window.",
+            )
+            return
+        project = self.engine.current_project()
+        default_dir = str((project.office_dir / "metrics").resolve()) if project else "."
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        default_path = str(
+            Path(default_dir) / f"desktop-trend-{ctx['mode'].lower()}-{ctx['metric']}-{timestamp}.md"
+        )
+        selected, _filter_name = QFileDialog.getSaveFileName(
+            self,
+            "Export Trend Report",
+            default_path,
+            "Markdown Files (*.md);;All Files (*)",
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        latest_value = ctx["values"][-1] if ctx["values"] else None
+        prev_value = ctx["values"][-2] if len(ctx["values"]) > 1 else None
+        report_lines = [
+            "# Desktop Trend Report",
+            "",
+            f"- Generated at: {datetime.now(timezone.utc).isoformat()}",
+            f"- Slice: {ctx['mode']}",
+            f"- Metric: {ctx['metric']}",
+            f"- Key: {ctx['key']}",
+            f"- Window: {ctx['window']}",
+            f"- Points: {len(ctx['filtered'])}",
+            f"- Latest: {_metric_value_text(latest_value, ctx['metric'])}",
+            f"- Delta vs previous: {_delta_pct(latest_value, prev_value)}",
+            "",
+            "| Timestamp | Value | Gate | Score File |",
+            "|---|---:|---|---|",
+        ]
+        for point, value in zip(ctx["filtered"], ctx["values"]):
+            gate_status = "n/a"
+            if point.gate_passed is True:
+                gate_status = "pass"
+            elif point.gate_passed is False:
+                gate_status = "fail"
+            report_lines.append(
+                "| "
+                f"{point.generated_at} | {_metric_value_text(value, ctx['metric'])} | "
+                f"{gate_status} | {point.score_path.name} |"
+            )
+        path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+        QMessageBox.information(self, "Export report", f"Report saved:\n{path}")
 
     def _refresh_recent_projects(self) -> None:
         self.recent_projects_list.clear()

@@ -110,11 +110,12 @@ Completed:
 - Desktop project-home release/productivity card from eval artifacts (impact, acceptance, regression, gate, cost, duration).
 - Desktop metric-history timeline with latest-vs-previous deltas from evaluation score artifacts.
 - Desktop filtered trend view (overall/project/workflow slices, date windows, metric selection, inline trend rendering).
+- Desktop exportable trend reporting (CSV + Markdown from current filtered view).
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Rich graphical charts and exportable productivity reports.
+- Rich graphical charts (line/bar visualizations) and image export.
 
 ## Phase 5: Remote MCP Product Surface
 
