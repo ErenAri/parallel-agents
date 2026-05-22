@@ -287,6 +287,32 @@ def test_productivity_trend_reads_multiple_scores_and_gate(tmp_path):
             total_duration_seconds=150.0,
         ),
     )
+    breakdown = EvaluationBreakdown(
+        by_project=[
+            EvaluationBreakdownBucket(
+                key="C:/repo-a",
+                case_count=3,
+                completed_count=3,
+                failed_count=0,
+                parse_error_count=0,
+                worker_error_count=0,
+                total_cost_usd=0.9,
+                total_duration_seconds=110.0,
+            )
+        ],
+        by_workflow=[
+            EvaluationBreakdownBucket(
+                key="RELEASE",
+                case_count=2,
+                completed_count=2,
+                failed_count=0,
+                parse_error_count=0,
+                worker_error_count=0,
+                total_cost_usd=0.6,
+                total_duration_seconds=70.0,
+            )
+        ],
+    )
 
     (metrics_dir / "2026-05-21-score.json").write_text(
         older_score.model_dump_json(indent=2), encoding="utf-8"
@@ -297,6 +323,9 @@ def test_productivity_trend_reads_multiple_scores_and_gate(tmp_path):
     (metrics_dir / "2026-05-22-gate.json").write_text(
         gate.model_dump_json(indent=2), encoding="utf-8"
     )
+    (metrics_dir / "2026-05-22-breakdown.json").write_text(
+        breakdown.model_dump_json(indent=2), encoding="utf-8"
+    )
 
     trend = service.productivity_trend(limit=8)
     assert len(trend) == 2
@@ -304,5 +333,9 @@ def test_productivity_trend_reads_multiple_scores_and_gate(tmp_path):
     assert trend[0].gate_passed is True
     assert trend[0].total_cost_usd == pytest.approx(1.2)
     assert trend[0].total_duration_seconds == pytest.approx(150.0)
+    assert "C:/repo-a" in trend[0].project_buckets
+    assert trend[0].project_buckets["C:/repo-a"].case_count == 3
+    assert "RELEASE" in trend[0].workflow_buckets
+    assert trend[0].workflow_buckets["RELEASE"].total_cost_usd == pytest.approx(0.6)
     assert trend[1].generated_at == older_time.isoformat()
     assert trend[1].gate_passed is None

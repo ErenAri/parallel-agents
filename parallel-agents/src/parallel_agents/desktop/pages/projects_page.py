@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from parallel_agents.desktop._qt import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -12,6 +14,7 @@ from parallel_agents.desktop._qt import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QTextBrowser,
     QVBoxLayout,
     Qt,
     Signal,
@@ -31,6 +34,7 @@ class ProjectsPage(Page):
         )
         self.engine = engine
         self.history = HistoryStore()
+        self._trend_cache = []
 
         actions = QHBoxLayout()
         open_btn = QPushButton("Open Project Folder...")
@@ -75,12 +79,39 @@ class ProjectsPage(Page):
         self.productivity_trend_label.setStyleSheet("font-weight: 600; padding-top: 8px;")
         self.productivity_trend_meta = QLabel("")
         self.productivity_trend_meta.setStyleSheet("color: #8a90a2;")
+
+        trend_controls = QHBoxLayout()
+        self.trend_mode = QComboBox()
+        self.trend_mode.addItems(["Overall", "Project", "Workflow"])
+        self.trend_mode.currentTextChanged.connect(self._on_trend_controls_changed)
+        self.trend_metric = QComboBox()
+        self.trend_metric.currentTextChanged.connect(self._on_trend_controls_changed)
+        self.trend_key = QComboBox()
+        self.trend_key.currentTextChanged.connect(self._on_trend_controls_changed)
+        self.trend_window = QComboBox()
+        self.trend_window.addItems(["All", "7d", "30d", "90d"])
+        self.trend_window.currentTextChanged.connect(self._on_trend_controls_changed)
+        trend_controls.addWidget(QLabel("Slice"))
+        trend_controls.addWidget(self.trend_mode)
+        trend_controls.addWidget(QLabel("Metric"))
+        trend_controls.addWidget(self.trend_metric, stretch=1)
+        trend_controls.addWidget(QLabel("Key"))
+        trend_controls.addWidget(self.trend_key, stretch=1)
+        trend_controls.addWidget(QLabel("Window"))
+        trend_controls.addWidget(self.trend_window)
+
+        self.trend_chart = QTextBrowser()
+        self.trend_chart.setOpenExternalLinks(False)
+        self.trend_chart.setMinimumHeight(140)
+
         self.productivity_trend_list = QListWidget()
         productivity_layout.addWidget(self.productivity_label)
         productivity_layout.addWidget(self.productivity_meta)
         productivity_layout.addWidget(self.productivity_stats)
         productivity_layout.addWidget(self.productivity_trend_label)
         productivity_layout.addWidget(self.productivity_trend_meta)
+        productivity_layout.addLayout(trend_controls)
+        productivity_layout.addWidget(self.trend_chart)
         productivity_layout.addWidget(self.productivity_trend_list)
         self.body_layout.addWidget(self.productivity_card)
 
@@ -185,6 +216,7 @@ class ProjectsPage(Page):
     def _refresh_productivity(self) -> None:
         snapshot = self.engine.productivity_snapshot()
         trend = self.engine.productivity_trend(limit=8)
+        self._trend_cache = trend
         self.productivity_trend_list.clear()
         source_bits: list[str] = []
         if snapshot.score_path is not None:
@@ -202,6 +234,7 @@ class ProjectsPage(Page):
                 "Run `parallel-agents eval score` (and optionally `eval breakdown`, `eval gate`) to populate this view."
             )
             self.productivity_trend_meta.setText("")
+            self.trend_chart.setPlainText("")
             return
 
         generated = snapshot.generated_at or "unknown time"
@@ -242,8 +275,11 @@ class ProjectsPage(Page):
 
         if not trend:
             self.productivity_trend_meta.setText("No historical score artifacts found.")
+            self.trend_chart.setPlainText("")
             return
         self.productivity_trend_meta.setText(f"{len(trend)} score snapshots")
+        self._sync_trend_controls(trend)
+        self._render_trend_chart(trend)
         for entry in trend:
             gate_text = "gate n/a"
             if entry.gate_passed is True:
@@ -260,6 +296,86 @@ class ProjectsPage(Page):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, str(entry.score_path))
             self.productivity_trend_list.addItem(item)
+
+    def _on_trend_controls_changed(self, _value: str) -> None:
+        if not self._trend_cache:
+            return
+        self._sync_trend_controls(self._trend_cache, preserve=True)
+        self._render_trend_chart(self._trend_cache)
+
+    def _sync_trend_controls(self, trend: list, *, preserve: bool = False) -> None:
+        mode = self.trend_mode.currentText()
+        mode_metrics = {
+            "Overall": [
+                "impact",
+                "acceptance",
+                "regression",
+                "precision",
+                "cost",
+                "duration",
+                "cases",
+                "failed",
+            ],
+            "Project": ["cost", "duration", "cases", "failed"],
+            "Workflow": ["cost", "duration", "cases", "failed"],
+        }
+        keys = ["(all)"]
+        if mode == "Project":
+            keys.extend(sorted({k for point in trend for k in point.project_buckets}))
+        elif mode == "Workflow":
+            keys.extend(sorted({k for point in trend for k in point.workflow_buckets}))
+
+        current_metric = self.trend_metric.currentText() if preserve else ""
+        current_key = self.trend_key.currentText() if preserve else ""
+
+        self.trend_metric.blockSignals(True)
+        self.trend_metric.clear()
+        self.trend_metric.addItems(mode_metrics.get(mode, mode_metrics["Overall"]))
+        if current_metric:
+            idx = self.trend_metric.findText(current_metric)
+            if idx >= 0:
+                self.trend_metric.setCurrentIndex(idx)
+        self.trend_metric.blockSignals(False)
+
+        self.trend_key.blockSignals(True)
+        self.trend_key.clear()
+        self.trend_key.addItems(keys)
+        if current_key:
+            idx = self.trend_key.findText(current_key)
+            if idx >= 0:
+                self.trend_key.setCurrentIndex(idx)
+        self.trend_key.blockSignals(False)
+
+    def _render_trend_chart(self, trend: list) -> None:
+        mode = self.trend_mode.currentText()
+        metric = self.trend_metric.currentText().strip() or "impact"
+        key = self.trend_key.currentText().strip() or "(all)"
+        window_label = self.trend_window.currentText().strip() or "All"
+
+        filtered = _filter_trend_window(trend, window_label)
+        if not filtered:
+            self.trend_chart.setPlainText("No trend points in selected window.")
+            return
+        filtered = sorted(filtered, key=lambda point: point.generated_at)
+        values = [_trend_value(point, mode, metric, key) for point in filtered]
+        present_values = [v for v in values if v is not None]
+        spark = _sparkline(present_values)
+        latest_value = values[-1] if values else None
+        prev_value = values[-2] if len(values) > 1 else None
+        delta = _delta_pct(latest_value, prev_value)
+        chart_lines = [
+            f"{mode} / {metric} / {key} / {window_label}",
+            f"Trend: {spark if spark else '(n/a)'}",
+            f"Latest: {_metric_value_text(latest_value, metric)}",
+            f"Delta vs previous: {delta}",
+            "",
+            "Points (oldest -> newest):",
+        ]
+        for point, value in zip(filtered, values):
+            chart_lines.append(
+                f"- {point.generated_at}: {_metric_value_text(value, metric)}"
+            )
+        self.trend_chart.setPlainText("\n".join(chart_lines))
 
     def _refresh_recent_projects(self) -> None:
         self.recent_projects_list.clear()
@@ -313,3 +429,101 @@ def _delta_pct(current: float | None, previous: float | None) -> str:
     delta = (current - previous) * 100.0
     sign = "+" if delta >= 0 else ""
     return f"{sign}{delta:.2f}%"
+
+
+def _filter_trend_window(trend: list, window_label: str) -> list:
+    if window_label == "All":
+        return list(trend)
+    now = datetime.now(timezone.utc)
+    days_map = {"7d": 7, "30d": 30, "90d": 90}
+    days = days_map.get(window_label)
+    if days is None:
+        return list(trend)
+    min_ts = now - timedelta(days=days)
+    output = []
+    for point in trend:
+        ts = _parse_iso(point.generated_at)
+        if ts is not None and ts >= min_ts:
+            output.append(point)
+    return output
+
+
+def _parse_iso(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _trend_value(point, mode: str, metric: str, key: str) -> float | None:
+    if mode == "Overall":
+        if metric == "impact":
+            return point.weighted_delivery_impact_score
+        if metric == "acceptance":
+            return point.acceptance_rate
+        if metric == "regression":
+            return point.regression_rate
+        if metric == "precision":
+            return point.finding_precision
+        if metric == "cost":
+            return point.total_cost_usd
+        if metric == "duration":
+            return point.total_duration_seconds
+        if metric == "cases":
+            return float(point.case_count)
+        if metric == "failed":
+            return float(point.failed_count)
+        return None
+
+    bucket_map = point.project_buckets if mode == "Project" else point.workflow_buckets
+    if key == "(all)":
+        buckets = list(bucket_map.values())
+    else:
+        single = bucket_map.get(key)
+        buckets = [single] if single is not None else []
+    if not buckets:
+        return None
+    if metric == "cost":
+        return sum(bucket.total_cost_usd for bucket in buckets)
+    if metric == "duration":
+        return sum(bucket.total_duration_seconds for bucket in buckets)
+    if metric == "cases":
+        return float(sum(bucket.case_count for bucket in buckets))
+    if metric == "failed":
+        return float(sum(bucket.failed_count for bucket in buckets))
+    return None
+
+
+def _metric_value_text(value: float | None, metric: str) -> str:
+    if value is None:
+        return "n/a"
+    if metric in {"impact", "acceptance", "regression", "precision"}:
+        return f"{value * 100:.2f}%"
+    if metric == "cost":
+        return f"${value:.4f}"
+    if metric == "duration":
+        if value < 60:
+            return f"{value:.1f}s"
+        return f"{value / 60.0:.1f}m"
+    if metric in {"cases", "failed"}:
+        return str(int(round(value)))
+    return f"{value:.4f}"
+
+
+def _sparkline(values: list[float]) -> str:
+    if not values:
+        return ""
+    chars = "._-:=+*#"
+    min_v = min(values)
+    max_v = max(values)
+    if max_v == min_v:
+        return chars[0] * len(values)
+    pieces = []
+    for value in values:
+        ratio = (value - min_v) / (max_v - min_v)
+        idx = int(round(ratio * (len(chars) - 1)))
+        pieces.append(chars[idx])
+    return "".join(pieces)

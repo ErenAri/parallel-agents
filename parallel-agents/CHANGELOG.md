@@ -15,6 +15,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - artifact compare against previous runs with inline unified diff view
   - release/productivity summary card from eval artifacts (impact, acceptance, regression, gate, cost, duration)
   - metric-history timeline with latest-vs-previous deltas
+  - filtered trend view (overall/project/workflow slices, metric/window controls, inline trend rendering)
   - approvals queue filters and approved-plan apply action
   - GitHub PR creation flow from desktop with run-linked PR summary artifact
 

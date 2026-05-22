@@ -109,11 +109,12 @@ Completed:
 - Desktop Runs page now executes real pipeline runs with live activity streaming and worker status updates.
 - Desktop project-home release/productivity card from eval artifacts (impact, acceptance, regression, gate, cost, duration).
 - Desktop metric-history timeline with latest-vs-previous deltas from evaluation score artifacts.
+- Desktop filtered trend view (overall/project/workflow slices, date windows, metric selection, inline trend rendering).
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Charted trend visuals and filterable history views (workflow/project/date slices).
+- Rich graphical charts and exportable productivity reports.
 
 ## Phase 5: Remote MCP Product Surface
 

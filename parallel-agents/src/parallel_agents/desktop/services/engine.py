@@ -34,6 +34,7 @@ from parallel_agents.company_workflows import (
 from parallel_agents.eval_harness import (
     EvaluationAggregate,
     EvaluationBreakdown,
+    EvaluationBreakdownBucket,
     EvaluationGateResult,
     EvaluationResults,
     EvaluationScore,
@@ -128,6 +129,16 @@ class ProductivityTrendPoint:
     gate_passed: bool | None
     total_cost_usd: float | None
     total_duration_seconds: float | None
+    project_buckets: dict[str, "TrendBucketValue"] = field(default_factory=dict)
+    workflow_buckets: dict[str, "TrendBucketValue"] = field(default_factory=dict)
+
+
+@dataclass
+class TrendBucketValue:
+    case_count: int
+    failed_count: int
+    total_cost_usd: float
+    total_duration_seconds: float
 
 
 @dataclass
@@ -663,6 +674,7 @@ class EngineService:
 
             gate = self._load_related_gate(path)
             aggregate = gate.aggregate if gate is not None else None
+            breakdown = self._load_related_breakdown(path)
             points.append(
                 ProductivityTrendPoint(
                     generated_at=score.generated_at.isoformat(),
@@ -678,6 +690,12 @@ class EngineService:
                     total_cost_usd=(aggregate.total_cost_usd if aggregate is not None else None),
                     total_duration_seconds=(
                         aggregate.total_duration_seconds if aggregate is not None else None
+                    ),
+                    project_buckets=self._bucket_map(
+                        breakdown.by_project if breakdown is not None else []
+                    ),
+                    workflow_buckets=self._bucket_map(
+                        breakdown.by_workflow if breakdown is not None else []
                     ),
                 )
             )
@@ -1044,6 +1062,33 @@ class EngineService:
             if gate is not None:
                 return gate
         return None
+
+    def _load_related_breakdown(self, score_path: Path) -> EvaluationBreakdown | None:
+        candidates = [
+            score_path.with_name(score_path.name.replace("score", "breakdown")),
+            score_path.with_name(score_path.name.replace("Score", "Breakdown")),
+            score_path.parent / "eval-breakdown.json",
+            score_path.parent / "breakdown.json",
+        ]
+        for candidate in candidates:
+            breakdown = self._load_model(candidate, EvaluationBreakdown)
+            if breakdown is not None:
+                return breakdown
+        return None
+
+    @staticmethod
+    def _bucket_map(
+        buckets: list[EvaluationBreakdownBucket],
+    ) -> dict[str, TrendBucketValue]:
+        mapped: dict[str, TrendBucketValue] = {}
+        for bucket in buckets:
+            mapped[bucket.key] = TrendBucketValue(
+                case_count=bucket.case_count,
+                failed_count=bucket.failed_count,
+                total_cost_usd=bucket.total_cost_usd,
+                total_duration_seconds=bucket.total_duration_seconds,
+            )
+        return mapped
 
 
 def _stat_iso(path: Path) -> str:
