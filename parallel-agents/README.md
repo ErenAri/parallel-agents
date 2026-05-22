@@ -181,6 +181,7 @@ Desktop Office (`parallel-agents-desktop`) now includes:
 - graphical chart rendering with chart image export (PNG)
 - cross-run baseline vs candidate comparison with delta report export
 - comparison drill-down by workflow, project, and case-level changes
+- case-row evidence links to underlying score/gate/breakdown/results/run artifacts
 - approvals queue with status filters and approved plan apply action
 - company workflow steps through issue-plan apply
 - GitHub PR creation from run context with generated PR summary markdown

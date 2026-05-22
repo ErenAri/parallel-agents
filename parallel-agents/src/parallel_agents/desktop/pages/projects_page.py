@@ -41,6 +41,7 @@ class ProjectsPage(Page):
         self.engine = engine
         self.history = HistoryStore()
         self._trend_cache = []
+        self._current_comparison: ProductivityComparison | None = None
 
         actions = QHBoxLayout()
         open_btn = QPushButton("Open Project Folder...")
@@ -141,6 +142,11 @@ class ProjectsPage(Page):
         self.compare_view = QTextBrowser()
         self.compare_view.setMinimumHeight(120)
         self.compare_view.setOpenExternalLinks(False)
+        self.compare_case_list = QListWidget()
+        self.compare_case_list.itemSelectionChanged.connect(self._show_selected_case_evidence)
+        self.compare_case_evidence = QTextBrowser()
+        self.compare_case_evidence.setOpenExternalLinks(True)
+        self.compare_case_evidence.setMinimumHeight(120)
 
         productivity_layout.addWidget(self.productivity_label)
         productivity_layout.addWidget(self.productivity_meta)
@@ -153,6 +159,9 @@ class ProjectsPage(Page):
         productivity_layout.addWidget(self.productivity_trend_list)
         productivity_layout.addLayout(compare_controls)
         productivity_layout.addWidget(self.compare_view)
+        productivity_layout.addWidget(QLabel("Case-Level Evidence Links"))
+        productivity_layout.addWidget(self.compare_case_list)
+        productivity_layout.addWidget(self.compare_case_evidence)
         self.body_layout.addWidget(self.productivity_card)
 
         recent_projects_title = QLabel("Recent Project Folders")
@@ -277,6 +286,9 @@ class ProjectsPage(Page):
             self.trend_chart.setPlainText("")
             self.trend_visual.setPixmap(_build_empty_trend_pixmap("No trend data"))
             self.compare_view.setPlainText("")
+            self.compare_case_list.clear()
+            self.compare_case_evidence.setPlainText("")
+            self._current_comparison = None
             return
 
         generated = snapshot.generated_at or "unknown time"
@@ -320,6 +332,9 @@ class ProjectsPage(Page):
             self.trend_chart.setPlainText("")
             self.trend_visual.setPixmap(_build_empty_trend_pixmap("No score snapshots"))
             self.compare_view.setPlainText("")
+            self.compare_case_list.clear()
+            self.compare_case_evidence.setPlainText("")
+            self._current_comparison = None
             return
         self.productivity_trend_meta.setText(f"{len(trend)} score snapshots")
         self._sync_trend_controls(trend)
@@ -650,11 +665,17 @@ class ProjectsPage(Page):
         candidate = str(self.compare_candidate.currentData() or "").strip()
         if not baseline or not candidate:
             self.compare_view.setPlainText("Select baseline and candidate snapshots.")
+            self.compare_case_list.clear()
+            self.compare_case_evidence.setPlainText("")
+            self._current_comparison = None
             return
         if baseline == candidate:
             self.compare_view.setPlainText(
                 "Baseline and candidate are the same snapshot. Select two different points."
             )
+            self.compare_case_list.clear()
+            self.compare_case_evidence.setPlainText("")
+            self._current_comparison = None
             return
         try:
             comparison = self.engine.compare_productivity_snapshots(
@@ -663,8 +684,13 @@ class ProjectsPage(Page):
             )
         except Exception as exc:  # noqa: BLE001
             self.compare_view.setPlainText(f"Comparison failed: {exc}")
+            self.compare_case_list.clear()
+            self.compare_case_evidence.setPlainText("")
+            self._current_comparison = None
             return
+        self._current_comparison = comparison
         self.compare_view.setPlainText(_comparison_report_text(comparison))
+        self._populate_case_change_list(comparison)
 
     def _export_comparison_report(self) -> None:
         baseline = str(self.compare_baseline.currentData() or "").strip()
@@ -701,6 +727,118 @@ class ProjectsPage(Page):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_comparison_report_markdown(comparison), encoding="utf-8")
         QMessageBox.information(self, "Export compare", f"Report saved:\n{path}")
+
+    def _populate_case_change_list(self, comparison: ProductivityComparison) -> None:
+        self.compare_case_list.clear()
+        if not comparison.case_changes:
+            self.compare_case_evidence.setPlainText("No case-level changes found.")
+            return
+        for change in comparison.case_changes:
+            label = (
+                f"{change.case_id} | "
+                f"{change.baseline_status or 'n/a'} -> {change.candidate_status or 'n/a'} | "
+                f"cost {_signed_usd(change.total_cost_usd_delta)} | "
+                f"duration {_signed_duration(change.duration_seconds_delta)}"
+            )
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, change.case_id)
+            self.compare_case_list.addItem(item)
+        self.compare_case_list.setCurrentRow(0)
+        self._show_selected_case_evidence()
+
+    def _show_selected_case_evidence(self) -> None:
+        comparison = self._current_comparison
+        if comparison is None:
+            self.compare_case_evidence.setPlainText("")
+            return
+        item = self.compare_case_list.currentItem()
+        if item is None:
+            self.compare_case_evidence.setPlainText("Select a case row to inspect evidence links.")
+            return
+        case_id = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+        if not case_id:
+            self.compare_case_evidence.setPlainText("Select a case row to inspect evidence links.")
+            return
+        selected = next((c for c in comparison.case_changes if c.case_id == case_id), None)
+        if selected is None:
+            self.compare_case_evidence.setPlainText("Case change not found.")
+            return
+
+        links: list[str] = []
+        links.extend(
+            _path_markdown_links(
+                "Baseline score",
+                comparison.baseline_score_path,
+                "Candidate score",
+                comparison.candidate_score_path,
+            )
+        )
+        links.extend(
+            _path_markdown_links(
+                "Baseline gate",
+                comparison.baseline_gate_path,
+                "Candidate gate",
+                comparison.candidate_gate_path,
+            )
+        )
+        links.extend(
+            _path_markdown_links(
+                "Baseline breakdown",
+                comparison.baseline_breakdown_path,
+                "Candidate breakdown",
+                comparison.candidate_breakdown_path,
+            )
+        )
+        links.extend(
+            _path_markdown_links(
+                "Baseline results",
+                comparison.baseline_results_path,
+                "Candidate results",
+                comparison.candidate_results_path,
+            )
+        )
+
+        project = self.engine.current_project()
+        if project is not None:
+            if selected.baseline_run_id:
+                baseline_artifact = (
+                    project.office_dir
+                    / selected.baseline_run_id
+                    / "company"
+                    / "final-output.json"
+                )
+                if baseline_artifact.exists():
+                    links.append(_to_md_file_link("Baseline run final output", baseline_artifact))
+            if selected.candidate_run_id:
+                candidate_artifact = (
+                    project.office_dir
+                    / selected.candidate_run_id
+                    / "company"
+                    / "final-output.json"
+                )
+                if candidate_artifact.exists():
+                    links.append(_to_md_file_link("Candidate run final output", candidate_artifact))
+
+        if not links:
+            links.append("No evidence file links resolved for this case.")
+
+        details = [
+            f"### Case `{selected.case_id}`",
+            "",
+            f"- Status: `{selected.baseline_status or 'n/a'}` -> `{selected.candidate_status or 'n/a'}`",
+            f"- Cost delta: `{_signed_usd(selected.total_cost_usd_delta)}`",
+            f"- Duration delta: `{_signed_duration(selected.duration_seconds_delta)}`",
+            f"- Findings delta: `{_signed_optional_int(selected.findings_count_delta)}`",
+            f"- Recommendations delta: `{_signed_optional_int(selected.recommendations_count_delta)}`",
+            f"- Patch changed: `{'yes' if selected.patch_generated_changed else 'no'}`",
+            "",
+            "### Evidence Links",
+            "",
+            *[f"- {link}" for link in links],
+            "",
+            "Tip: result files include full per-case evidence payloads by case_id.",
+        ]
+        self.compare_case_evidence.setMarkdown("\n".join(details))
 
     def _refresh_recent_projects(self) -> None:
         self.recent_projects_list.clear()
@@ -1019,6 +1157,29 @@ def _gate_text(value: bool | None) -> str:
     if value is False:
         return "fail"
     return "n/a"
+
+
+def _path_markdown_links(
+    left_label: str,
+    left_path: Path | None,
+    right_label: str,
+    right_path: Path | None,
+) -> list[str]:
+    output: list[str] = []
+    if left_path is not None and left_path.exists():
+        output.append(_to_md_file_link(left_label, left_path))
+    if right_path is not None and right_path.exists():
+        output.append(_to_md_file_link(right_label, right_path))
+    return output
+
+
+def _to_md_file_link(label: str, path: Path) -> str:
+    try:
+        uri = path.resolve().as_uri()
+    except ValueError:
+        resolved = str(path.resolve()).replace("\\", "/")
+        uri = f"file:///{resolved}"
+    return f"[{label}]({uri})"
 
 
 def _pct(value: float | None) -> str:

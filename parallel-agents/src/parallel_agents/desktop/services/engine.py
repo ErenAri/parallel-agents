@@ -147,6 +147,12 @@ class ProductivityComparison:
     candidate_generated_at: str
     baseline_score_path: Path
     candidate_score_path: Path
+    baseline_gate_path: Path | None
+    candidate_gate_path: Path | None
+    baseline_breakdown_path: Path | None
+    candidate_breakdown_path: Path | None
+    baseline_results_path: Path | None
+    candidate_results_path: Path | None
     baseline_gate_passed: bool | None
     candidate_gate_passed: bool | None
     weighted_delivery_impact_delta: float | None
@@ -175,6 +181,8 @@ class BucketDelta:
 @dataclass
 class CaseDelta:
     case_id: str
+    baseline_run_id: str | None
+    candidate_run_id: str | None
     baseline_status: str | None
     candidate_status: str | None
     duration_seconds_delta: float | None
@@ -764,12 +772,20 @@ class EngineService:
         if candidate_score is None:
             raise FileNotFoundError(f"Could not load candidate score: {candidate_path}")
 
-        baseline_gate = self._load_related_gate(baseline_path)
-        candidate_gate = self._load_related_gate(candidate_path)
-        baseline_breakdown = self._load_related_breakdown(baseline_path)
-        candidate_breakdown = self._load_related_breakdown(candidate_path)
-        baseline_results = self._load_related_results(baseline_path)
-        candidate_results = self._load_related_results(candidate_path)
+        baseline_gate_path, baseline_gate = self._resolve_related_gate(baseline_path)
+        candidate_gate_path, candidate_gate = self._resolve_related_gate(candidate_path)
+        baseline_breakdown_path, baseline_breakdown = self._resolve_related_breakdown(
+            baseline_path
+        )
+        candidate_breakdown_path, candidate_breakdown = self._resolve_related_breakdown(
+            candidate_path
+        )
+        baseline_results_path, baseline_results = self._resolve_related_results(
+            baseline_path
+        )
+        candidate_results_path, candidate_results = self._resolve_related_results(
+            candidate_path
+        )
 
         baseline_cost = (
             baseline_gate.aggregate.total_cost_usd if baseline_gate is not None else None
@@ -805,6 +821,12 @@ class EngineService:
             candidate_generated_at=candidate_score.generated_at.isoformat(),
             baseline_score_path=baseline_path,
             candidate_score_path=candidate_path,
+            baseline_gate_path=baseline_gate_path,
+            candidate_gate_path=candidate_gate_path,
+            baseline_breakdown_path=baseline_breakdown_path,
+            candidate_breakdown_path=candidate_breakdown_path,
+            baseline_results_path=baseline_results_path,
+            candidate_results_path=candidate_results_path,
             baseline_gate_passed=(
                 baseline_gate.passed if baseline_gate is not None else None
             ),
@@ -1187,6 +1209,13 @@ class EngineService:
         return sorted(found.values(), key=lambda p: p.stat().st_mtime, reverse=True)
 
     def _load_related_gate(self, score_path: Path) -> EvaluationGateResult | None:
+        _path, gate = self._resolve_related_gate(score_path)
+        return gate
+
+    def _resolve_related_gate(
+        self,
+        score_path: Path,
+    ) -> tuple[Path | None, EvaluationGateResult | None]:
         candidates = [
             score_path.with_name(score_path.name.replace("score", "gate")),
             score_path.with_name(score_path.name.replace("Score", "Gate")),
@@ -1196,10 +1225,17 @@ class EngineService:
         for candidate in candidates:
             gate = self._load_model(candidate, EvaluationGateResult)
             if gate is not None:
-                return gate
-        return None
+                return candidate.resolve(), gate
+        return None, None
 
     def _load_related_breakdown(self, score_path: Path) -> EvaluationBreakdown | None:
+        _path, breakdown = self._resolve_related_breakdown(score_path)
+        return breakdown
+
+    def _resolve_related_breakdown(
+        self,
+        score_path: Path,
+    ) -> tuple[Path | None, EvaluationBreakdown | None]:
         candidates = [
             score_path.with_name(score_path.name.replace("score", "breakdown")),
             score_path.with_name(score_path.name.replace("Score", "Breakdown")),
@@ -1209,10 +1245,17 @@ class EngineService:
         for candidate in candidates:
             breakdown = self._load_model(candidate, EvaluationBreakdown)
             if breakdown is not None:
-                return breakdown
-        return None
+                return candidate.resolve(), breakdown
+        return None, None
 
     def _load_related_results(self, score_path: Path) -> EvaluationResults | None:
+        _path, results = self._resolve_related_results(score_path)
+        return results
+
+    def _resolve_related_results(
+        self,
+        score_path: Path,
+    ) -> tuple[Path | None, EvaluationResults | None]:
         candidates = [
             score_path.with_name(score_path.name.replace("score", "results")),
             score_path.with_name(score_path.name.replace("Score", "Results")),
@@ -1222,8 +1265,8 @@ class EngineService:
         for candidate in candidates:
             results = self._load_model(candidate, EvaluationResults)
             if results is not None:
-                return results
-        return None
+                return candidate.resolve(), results
+        return None, None
 
     @staticmethod
     def _bucket_map(
@@ -1326,6 +1369,8 @@ class EngineService:
             changes.append(
                 CaseDelta(
                     case_id=case_id,
+                    baseline_run_id=(b.run_id if b is not None else None),
+                    candidate_run_id=(c.run_id if c is not None else None),
                     baseline_status=baseline_status,
                     candidate_status=candidate_status,
                     duration_seconds_delta=duration_delta,

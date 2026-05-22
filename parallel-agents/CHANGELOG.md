@@ -20,6 +20,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - graphical trend chart rendering and PNG export from desktop trend controls
   - baseline vs candidate comparison panel with delta metrics and markdown export
   - comparison drill-down sections for workflow/project/case-level deltas
+  - case-row evidence navigation links to score/gate/breakdown/results/run artifacts
   - approvals queue filters and approved-plan apply action
   - GitHub PR creation flow from desktop with run-linked PR summary artifact
 

@@ -114,11 +114,12 @@ Completed:
 - Desktop graphical trend chart rendering with PNG export.
 - Desktop cross-run benchmark comparison panel (baseline vs candidate) with delta report export.
 - Desktop drill-down analytics in comparison view (workflow/project/case-level change drivers).
+- Workflow navigation into detailed case evidence and artifact links from comparison rows.
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Workflow navigation into detailed case evidence and artifact links from comparison rows.
+- Desktop polish and usability hardening for production `.exe` workflows.
 
 ## Phase 5: Remote MCP Product Surface
 
