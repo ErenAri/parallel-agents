@@ -112,11 +112,12 @@ Completed:
 - Desktop filtered trend view (overall/project/workflow slices, date windows, metric selection, inline trend rendering).
 - Desktop exportable trend reporting (CSV + Markdown from current filtered view).
 - Desktop graphical trend chart rendering with PNG export.
+- Desktop cross-run benchmark comparison panel (baseline vs candidate) with delta report export.
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Deeper drill-down analytics and cross-run benchmark comparison UX.
+- Deeper drill-down analytics (case-level and workflow-level investigation from trend deltas).
 
 ## Phase 5: Remote MCP Product Surface
 

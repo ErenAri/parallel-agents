@@ -142,6 +142,25 @@ class TrendBucketValue:
 
 
 @dataclass
+class ProductivityComparison:
+    baseline_generated_at: str
+    candidate_generated_at: str
+    baseline_score_path: Path
+    candidate_score_path: Path
+    baseline_gate_passed: bool | None
+    candidate_gate_passed: bool | None
+    weighted_delivery_impact_delta: float | None
+    acceptance_rate_delta: float | None
+    regression_rate_delta: float | None
+    finding_precision_delta: float | None
+    completed_count_delta: int
+    failed_count_delta: int
+    case_count_delta: int
+    total_cost_usd_delta: float | None
+    total_duration_seconds_delta: float | None
+
+
+@dataclass
 class PullRequestResult:
     run_id: str
     repo: str
@@ -705,6 +724,80 @@ class EngineService:
             return []
         return points[:limit]
 
+    def compare_productivity_snapshots(
+        self,
+        *,
+        baseline_score_path: str | Path,
+        candidate_score_path: str | Path,
+    ) -> ProductivityComparison:
+        baseline_path = Path(baseline_score_path).resolve()
+        candidate_path = Path(candidate_score_path).resolve()
+
+        baseline_score = self._load_model(baseline_path, EvaluationScore)
+        if baseline_score is None:
+            raise FileNotFoundError(f"Could not load baseline score: {baseline_path}")
+        candidate_score = self._load_model(candidate_path, EvaluationScore)
+        if candidate_score is None:
+            raise FileNotFoundError(f"Could not load candidate score: {candidate_path}")
+
+        baseline_gate = self._load_related_gate(baseline_path)
+        candidate_gate = self._load_related_gate(candidate_path)
+
+        baseline_cost = (
+            baseline_gate.aggregate.total_cost_usd if baseline_gate is not None else None
+        )
+        candidate_cost = (
+            candidate_gate.aggregate.total_cost_usd if candidate_gate is not None else None
+        )
+        baseline_duration = (
+            baseline_gate.aggregate.total_duration_seconds
+            if baseline_gate is not None
+            else None
+        )
+        candidate_duration = (
+            candidate_gate.aggregate.total_duration_seconds
+            if candidate_gate is not None
+            else None
+        )
+
+        return ProductivityComparison(
+            baseline_generated_at=baseline_score.generated_at.isoformat(),
+            candidate_generated_at=candidate_score.generated_at.isoformat(),
+            baseline_score_path=baseline_path,
+            candidate_score_path=candidate_path,
+            baseline_gate_passed=(
+                baseline_gate.passed if baseline_gate is not None else None
+            ),
+            candidate_gate_passed=(
+                candidate_gate.passed if candidate_gate is not None else None
+            ),
+            weighted_delivery_impact_delta=_metric_delta(
+                candidate_score.weighted_delivery_impact_score,
+                baseline_score.weighted_delivery_impact_score,
+            ),
+            acceptance_rate_delta=_metric_delta(
+                candidate_score.acceptance_rate,
+                baseline_score.acceptance_rate,
+            ),
+            regression_rate_delta=_metric_delta(
+                candidate_score.regression_rate,
+                baseline_score.regression_rate,
+            ),
+            finding_precision_delta=_metric_delta(
+                candidate_score.finding_precision,
+                baseline_score.finding_precision,
+            ),
+            completed_count_delta=(
+                candidate_score.completed_count - baseline_score.completed_count
+            ),
+            failed_count_delta=(candidate_score.failed_count - baseline_score.failed_count),
+            case_count_delta=(candidate_score.case_count - baseline_score.case_count),
+            total_cost_usd_delta=_metric_delta(candidate_cost, baseline_cost),
+            total_duration_seconds_delta=_metric_delta(
+                candidate_duration, baseline_duration
+            ),
+        )
+
     def latest_run_id(self) -> str | None:
         runs = list_office_run_ids(self._current_project) if self._current_project else []
         return runs[0] if runs else None
@@ -1105,3 +1198,9 @@ def _iso_now() -> str:
 
 def _truthy(value: str | None) -> bool:
     return bool(value) and value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _metric_delta(candidate: float | None, baseline: float | None) -> float | None:
+    if candidate is None or baseline is None:
+        return None
+    return candidate - baseline

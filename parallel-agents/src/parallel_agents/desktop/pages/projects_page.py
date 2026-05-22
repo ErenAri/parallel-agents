@@ -26,7 +26,7 @@ from parallel_agents.desktop._qt import (
     Signal,
 )
 from parallel_agents.desktop.pages._base import Page
-from parallel_agents.desktop.services.engine import EngineService
+from parallel_agents.desktop.services.engine import EngineService, ProductivityComparison
 from parallel_agents.desktop.services.history import HistoryStore
 
 
@@ -125,6 +125,23 @@ class ProjectsPage(Page):
         self.trend_chart.setMinimumHeight(140)
 
         self.productivity_trend_list = QListWidget()
+        compare_controls = QHBoxLayout()
+        self.compare_baseline = QComboBox()
+        self.compare_candidate = QComboBox()
+        self.compare_btn = QPushButton("Compare")
+        self.compare_btn.clicked.connect(self._render_comparison)
+        self.export_compare_btn = QPushButton("Export Compare")
+        self.export_compare_btn.clicked.connect(self._export_comparison_report)
+        compare_controls.addWidget(QLabel("Baseline"))
+        compare_controls.addWidget(self.compare_baseline, stretch=1)
+        compare_controls.addWidget(QLabel("Candidate"))
+        compare_controls.addWidget(self.compare_candidate, stretch=1)
+        compare_controls.addWidget(self.compare_btn)
+        compare_controls.addWidget(self.export_compare_btn)
+        self.compare_view = QTextBrowser()
+        self.compare_view.setMinimumHeight(120)
+        self.compare_view.setOpenExternalLinks(False)
+
         productivity_layout.addWidget(self.productivity_label)
         productivity_layout.addWidget(self.productivity_meta)
         productivity_layout.addWidget(self.productivity_stats)
@@ -134,6 +151,8 @@ class ProjectsPage(Page):
         productivity_layout.addWidget(self.trend_visual)
         productivity_layout.addWidget(self.trend_chart)
         productivity_layout.addWidget(self.productivity_trend_list)
+        productivity_layout.addLayout(compare_controls)
+        productivity_layout.addWidget(self.compare_view)
         self.body_layout.addWidget(self.productivity_card)
 
         recent_projects_title = QLabel("Recent Project Folders")
@@ -257,6 +276,7 @@ class ProjectsPage(Page):
             self.productivity_trend_meta.setText("")
             self.trend_chart.setPlainText("")
             self.trend_visual.setPixmap(_build_empty_trend_pixmap("No trend data"))
+            self.compare_view.setPlainText("")
             return
 
         generated = snapshot.generated_at or "unknown time"
@@ -299,10 +319,13 @@ class ProjectsPage(Page):
             self.productivity_trend_meta.setText("No historical score artifacts found.")
             self.trend_chart.setPlainText("")
             self.trend_visual.setPixmap(_build_empty_trend_pixmap("No score snapshots"))
+            self.compare_view.setPlainText("")
             return
         self.productivity_trend_meta.setText(f"{len(trend)} score snapshots")
         self._sync_trend_controls(trend)
         self._render_trend_chart(trend)
+        self._sync_compare_controls(trend)
+        self._render_comparison()
         for entry in trend:
             gate_text = "gate n/a"
             if entry.gate_passed is True:
@@ -589,6 +612,96 @@ class ProjectsPage(Page):
             return
         QMessageBox.information(self, "Export chart", f"Chart saved:\n{path}")
 
+    def _sync_compare_controls(self, trend: list) -> None:
+        previous_baseline = self.compare_baseline.currentData()
+        previous_candidate = self.compare_candidate.currentData()
+
+        self.compare_baseline.blockSignals(True)
+        self.compare_candidate.blockSignals(True)
+        self.compare_baseline.clear()
+        self.compare_candidate.clear()
+        for point in trend:
+            label = (
+                f"{point.generated_at} | impact {_pct(point.weighted_delivery_impact_score)} "
+                f"| {point.score_path.name}"
+            )
+            score_path = str(point.score_path)
+            self.compare_baseline.addItem(label, score_path)
+            self.compare_candidate.addItem(label, score_path)
+
+        if trend:
+            baseline_index = 1 if len(trend) > 1 else 0
+            candidate_index = 0
+            if previous_baseline:
+                idx = self.compare_baseline.findData(previous_baseline)
+                if idx >= 0:
+                    baseline_index = idx
+            if previous_candidate:
+                idx = self.compare_candidate.findData(previous_candidate)
+                if idx >= 0:
+                    candidate_index = idx
+            self.compare_baseline.setCurrentIndex(baseline_index)
+            self.compare_candidate.setCurrentIndex(candidate_index)
+        self.compare_baseline.blockSignals(False)
+        self.compare_candidate.blockSignals(False)
+
+    def _render_comparison(self) -> None:
+        baseline = str(self.compare_baseline.currentData() or "").strip()
+        candidate = str(self.compare_candidate.currentData() or "").strip()
+        if not baseline or not candidate:
+            self.compare_view.setPlainText("Select baseline and candidate snapshots.")
+            return
+        if baseline == candidate:
+            self.compare_view.setPlainText(
+                "Baseline and candidate are the same snapshot. Select two different points."
+            )
+            return
+        try:
+            comparison = self.engine.compare_productivity_snapshots(
+                baseline_score_path=baseline,
+                candidate_score_path=candidate,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.compare_view.setPlainText(f"Comparison failed: {exc}")
+            return
+        self.compare_view.setPlainText(_comparison_report_text(comparison))
+
+    def _export_comparison_report(self) -> None:
+        baseline = str(self.compare_baseline.currentData() or "").strip()
+        candidate = str(self.compare_candidate.currentData() or "").strip()
+        if not baseline or not candidate or baseline == candidate:
+            QMessageBox.information(
+                self,
+                "Export compare",
+                "Pick two different snapshots first.",
+            )
+            return
+        try:
+            comparison = self.engine.compare_productivity_snapshots(
+                baseline_score_path=baseline,
+                candidate_score_path=candidate,
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Export compare", f"Comparison failed:\n{exc}")
+            return
+
+        project = self.engine.current_project()
+        default_dir = str((project.office_dir / "metrics").resolve()) if project else "."
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        default_path = str(Path(default_dir) / f"desktop-compare-{timestamp}.md")
+        selected, _filter_name = QFileDialog.getSaveFileName(
+            self,
+            "Export Comparison Report",
+            default_path,
+            "Markdown Files (*.md);;All Files (*)",
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_comparison_report_markdown(comparison), encoding="utf-8")
+        QMessageBox.information(self, "Export compare", f"Report saved:\n{path}")
+
     def _refresh_recent_projects(self) -> None:
         self.recent_projects_list.clear()
         roots = self.history.get("project_root", limit=12)
@@ -729,6 +842,90 @@ def _build_trend_pixmap(
     painter.drawText(10, 18, title)
     painter.end()
     return pixmap
+
+
+def _comparison_report_text(comparison: ProductivityComparison) -> str:
+    lines = [
+        f"Baseline: {comparison.baseline_generated_at} ({comparison.baseline_score_path.name})",
+        f"Candidate: {comparison.candidate_generated_at} ({comparison.candidate_score_path.name})",
+        "",
+        f"Impact delta: {_signed_pct(comparison.weighted_delivery_impact_delta)}",
+        f"Acceptance delta: {_signed_pct(comparison.acceptance_rate_delta)}",
+        f"Regression delta: {_signed_pct(comparison.regression_rate_delta)}",
+        f"Precision delta: {_signed_pct(comparison.finding_precision_delta)}",
+        f"Completed delta: {_signed_int(comparison.completed_count_delta)}",
+        f"Failed delta: {_signed_int(comparison.failed_count_delta)}",
+        f"Case count delta: {_signed_int(comparison.case_count_delta)}",
+        f"Cost delta: {_signed_usd(comparison.total_cost_usd_delta)}",
+        f"Duration delta: {_signed_duration(comparison.total_duration_seconds_delta)}",
+        "",
+        "Gate baseline/candidate: "
+        f"{_gate_text(comparison.baseline_gate_passed)} -> {_gate_text(comparison.candidate_gate_passed)}",
+    ]
+    return "\n".join(lines)
+
+
+def _comparison_report_markdown(comparison: ProductivityComparison) -> str:
+    lines = [
+        "# Desktop Productivity Comparison",
+        "",
+        f"- Generated at: {datetime.now(timezone.utc).isoformat()}",
+        f"- Baseline: `{comparison.baseline_generated_at}` (`{comparison.baseline_score_path.name}`)",
+        f"- Candidate: `{comparison.candidate_generated_at}` (`{comparison.candidate_score_path.name}`)",
+        "",
+        "| Metric | Delta (Candidate - Baseline) |",
+        "|---|---:|",
+        f"| Impact | {_signed_pct(comparison.weighted_delivery_impact_delta)} |",
+        f"| Acceptance | {_signed_pct(comparison.acceptance_rate_delta)} |",
+        f"| Regression | {_signed_pct(comparison.regression_rate_delta)} |",
+        f"| Precision | {_signed_pct(comparison.finding_precision_delta)} |",
+        f"| Completed | {_signed_int(comparison.completed_count_delta)} |",
+        f"| Failed | {_signed_int(comparison.failed_count_delta)} |",
+        f"| Case count | {_signed_int(comparison.case_count_delta)} |",
+        f"| Cost (USD) | {_signed_usd(comparison.total_cost_usd_delta)} |",
+        f"| Duration | {_signed_duration(comparison.total_duration_seconds_delta)} |",
+        "",
+        "Gate baseline/candidate: "
+        f"{_gate_text(comparison.baseline_gate_passed)} -> {_gate_text(comparison.candidate_gate_passed)}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _signed_pct(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value * 100:.2f}%"
+
+
+def _signed_usd(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}${abs(value):.4f}" if value < 0 else f"{sign}${value:.4f}"
+
+
+def _signed_duration(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    sign = "+" if value >= 0 else "-"
+    seconds = abs(value)
+    if seconds < 60:
+        return f"{sign}{seconds:.1f}s"
+    return f"{sign}{(seconds / 60.0):.1f}m"
+
+
+def _signed_int(value: int) -> str:
+    return f"{value:+d}"
+
+
+def _gate_text(value: bool | None) -> str:
+    if value is True:
+        return "pass"
+    if value is False:
+        return "fail"
+    return "n/a"
 
 
 def _pct(value: float | None) -> str:

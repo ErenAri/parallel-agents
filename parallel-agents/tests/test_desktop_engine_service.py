@@ -339,3 +339,85 @@ def test_productivity_trend_reads_multiple_scores_and_gate(tmp_path):
     assert trend[0].workflow_buckets["RELEASE"].total_cost_usd == pytest.approx(0.6)
     assert trend[1].generated_at == older_time.isoformat()
     assert trend[1].gate_passed is None
+
+
+def test_compare_productivity_snapshots_returns_expected_deltas(tmp_path):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    metrics_dir = office_dir(tmp_path) / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    baseline = EvaluationScore(
+        generated_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc),
+        case_count=5,
+        completed_count=5,
+        failed_count=0,
+        weighted_delivery_impact_score=0.10,
+        acceptance_rate=0.70,
+        regression_rate=0.08,
+        finding_precision=0.60,
+    )
+    candidate = EvaluationScore(
+        generated_at=datetime(2026, 5, 22, 12, 0, 0, tzinfo=timezone.utc),
+        case_count=6,
+        completed_count=5,
+        failed_count=1,
+        weighted_delivery_impact_score=0.16,
+        acceptance_rate=0.81,
+        regression_rate=0.05,
+        finding_precision=0.74,
+    )
+
+    baseline_path = metrics_dir / "baseline-score.json"
+    candidate_path = metrics_dir / "candidate-score.json"
+    baseline_path.write_text(baseline.model_dump_json(indent=2), encoding="utf-8")
+    candidate_path.write_text(candidate.model_dump_json(indent=2), encoding="utf-8")
+
+    (metrics_dir / "baseline-gate.json").write_text(
+        EvaluationGateResult(
+            passed=True,
+            failed_rules=[],
+            score=baseline,
+            aggregate=EvaluationAggregate(
+                case_count=5,
+                completed_count=5,
+                failed_count=0,
+                total_cost_usd=1.0,
+                total_duration_seconds=100.0,
+            ),
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    (metrics_dir / "candidate-gate.json").write_text(
+        EvaluationGateResult(
+            passed=False,
+            failed_rules=["failed_count above maximum (1 > 0)"],
+            score=candidate,
+            aggregate=EvaluationAggregate(
+                case_count=6,
+                completed_count=5,
+                failed_count=1,
+                total_cost_usd=1.5,
+                total_duration_seconds=130.0,
+            ),
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    comparison = service.compare_productivity_snapshots(
+        baseline_score_path=baseline_path,
+        candidate_score_path=candidate_path,
+    )
+
+    assert comparison.weighted_delivery_impact_delta == pytest.approx(0.06)
+    assert comparison.acceptance_rate_delta == pytest.approx(0.11)
+    assert comparison.regression_rate_delta == pytest.approx(-0.03)
+    assert comparison.finding_precision_delta == pytest.approx(0.14)
+    assert comparison.case_count_delta == 1
+    assert comparison.completed_count_delta == 0
+    assert comparison.failed_count_delta == 1
+    assert comparison.total_cost_usd_delta == pytest.approx(0.5)
+    assert comparison.total_duration_seconds_delta == pytest.approx(30.0)
+    assert comparison.baseline_gate_passed is True
+    assert comparison.candidate_gate_passed is False
