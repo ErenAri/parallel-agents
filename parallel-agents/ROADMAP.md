@@ -111,11 +111,12 @@ Completed:
 - Desktop metric-history timeline with latest-vs-previous deltas from evaluation score artifacts.
 - Desktop filtered trend view (overall/project/workflow slices, date windows, metric selection, inline trend rendering).
 - Desktop exportable trend reporting (CSV + Markdown from current filtered view).
+- Desktop graphical trend chart rendering with PNG export.
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Rich graphical charts (line/bar visualizations) and image export.
+- Deeper drill-down analytics and cross-run benchmark comparison UX.
 
 ## Phase 5: Remote MCP Product Surface
 

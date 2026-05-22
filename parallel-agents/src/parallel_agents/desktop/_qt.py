@@ -20,7 +20,10 @@ try:
         QColor,
         QFont,
         QIcon,
+        QPainter,
         QPalette,
+        QPen,
+        QPixmap,
         QTextCharFormat,
         QTextCursor,
     )

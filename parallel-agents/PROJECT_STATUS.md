@@ -57,6 +57,7 @@ The current release line is focused on local, reviewable workflows and a project
   - metric-history timeline with delta vs previous snapshot
   - filtered trend view (overall/project/workflow slices + metric/window controls)
   - trend export actions (CSV and Markdown) from desktop controls
+  - graphical trend chart with PNG export for the selected slice/window/metric
   - desktop approvals queue filters and one-click approved issue-plan apply
   - desktop GitHub PR creation flow with run-linked PR summary artifact
   - PyInstaller spec support for the project-office module

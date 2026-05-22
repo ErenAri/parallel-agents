@@ -17,6 +17,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - metric-history timeline with latest-vs-previous deltas
   - filtered trend view (overall/project/workflow slices, metric/window controls, inline trend rendering)
   - trend export actions for CSV and Markdown reports from selected trend slices/windows
+  - graphical trend chart rendering and PNG export from desktop trend controls
   - approvals queue filters and approved-plan apply action
   - GitHub PR creation flow from desktop with run-linked PR summary artifact
 

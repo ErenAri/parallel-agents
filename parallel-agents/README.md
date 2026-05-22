@@ -178,6 +178,7 @@ Desktop Office (`parallel-agents-desktop`) now includes:
 - metric-history timeline with latest-vs-previous deltas
 - filtered trend view (overall/project/workflow slices, metric picker, date window)
 - trend export from desktop (CSV and Markdown report)
+- graphical chart rendering with chart image export (PNG)
 - approvals queue with status filters and approved plan apply action
 - company workflow steps through issue-plan apply
 - GitHub PR creation from run context with generated PR summary markdown

@@ -5,8 +5,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from parallel_agents.desktop._qt import (
+    QColor,
     QComboBox,
     QFileDialog,
+    QFont,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -14,6 +16,9 @@ from parallel_agents.desktop._qt import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPainter,
+    QPen,
+    QPixmap,
     QPushButton,
     QTextBrowser,
     QVBoxLayout,
@@ -96,6 +101,8 @@ class ProjectsPage(Page):
         self.export_csv_btn.clicked.connect(self._export_trend_csv)
         self.export_md_btn = QPushButton("Export Report")
         self.export_md_btn.clicked.connect(self._export_trend_markdown)
+        self.export_png_btn = QPushButton("Export Chart")
+        self.export_png_btn.clicked.connect(self._export_trend_image)
         trend_controls.addWidget(QLabel("Slice"))
         trend_controls.addWidget(self.trend_mode)
         trend_controls.addWidget(QLabel("Metric"))
@@ -106,6 +113,12 @@ class ProjectsPage(Page):
         trend_controls.addWidget(self.trend_window)
         trend_controls.addWidget(self.export_csv_btn)
         trend_controls.addWidget(self.export_md_btn)
+        trend_controls.addWidget(self.export_png_btn)
+
+        self.trend_visual = QLabel()
+        self.trend_visual.setMinimumHeight(220)
+        self.trend_visual.setObjectName("Card")
+        self.trend_visual.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.trend_chart = QTextBrowser()
         self.trend_chart.setOpenExternalLinks(False)
@@ -118,6 +131,7 @@ class ProjectsPage(Page):
         productivity_layout.addWidget(self.productivity_trend_label)
         productivity_layout.addWidget(self.productivity_trend_meta)
         productivity_layout.addLayout(trend_controls)
+        productivity_layout.addWidget(self.trend_visual)
         productivity_layout.addWidget(self.trend_chart)
         productivity_layout.addWidget(self.productivity_trend_list)
         self.body_layout.addWidget(self.productivity_card)
@@ -242,6 +256,7 @@ class ProjectsPage(Page):
             )
             self.productivity_trend_meta.setText("")
             self.trend_chart.setPlainText("")
+            self.trend_visual.setPixmap(_build_empty_trend_pixmap("No trend data"))
             return
 
         generated = snapshot.generated_at or "unknown time"
@@ -283,6 +298,7 @@ class ProjectsPage(Page):
         if not trend:
             self.productivity_trend_meta.setText("No historical score artifacts found.")
             self.trend_chart.setPlainText("")
+            self.trend_visual.setPixmap(_build_empty_trend_pixmap("No score snapshots"))
             return
         self.productivity_trend_meta.setText(f"{len(trend)} score snapshots")
         self._sync_trend_controls(trend)
@@ -358,6 +374,7 @@ class ProjectsPage(Page):
         filtered = ctx["filtered"]
         if not filtered:
             self.trend_chart.setPlainText("No trend points in selected window.")
+            self.trend_visual.setPixmap(_build_empty_trend_pixmap("No points in selected window"))
             return
         mode = ctx["mode"]
         metric = ctx["metric"]
@@ -382,6 +399,14 @@ class ProjectsPage(Page):
                 f"- {point.generated_at}: {_metric_value_text(value, metric)}"
             )
         self.trend_chart.setPlainText("\n".join(chart_lines))
+        pixmap = _build_trend_pixmap(
+            values=values,
+            metric=metric,
+            title=f"{mode} / {metric} / {key} / {window_label}",
+            width=max(760, self.trend_visual.width()),
+            height=max(220, self.trend_visual.height()),
+        )
+        self.trend_visual.setPixmap(pixmap)
 
     def _trend_context(self, trend: list) -> dict:
         mode = self.trend_mode.currentText()
@@ -524,6 +549,46 @@ class ProjectsPage(Page):
         path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
         QMessageBox.information(self, "Export report", f"Report saved:\n{path}")
 
+    def _export_trend_image(self) -> None:
+        if not self._trend_cache:
+            QMessageBox.information(self, "Export chart", "No trend data to export.")
+            return
+        ctx = self._trend_context(self._trend_cache)
+        if not ctx["filtered"]:
+            QMessageBox.information(
+                self,
+                "Export chart",
+                "No trend points in the selected window.",
+            )
+            return
+        project = self.engine.current_project()
+        default_dir = str((project.office_dir / "metrics").resolve()) if project else "."
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        default_path = str(
+            Path(default_dir) / f"desktop-trend-{ctx['mode'].lower()}-{ctx['metric']}-{timestamp}.png"
+        )
+        selected, _filter_name = QFileDialog.getSaveFileName(
+            self,
+            "Export Trend Chart",
+            default_path,
+            "PNG Files (*.png);;All Files (*)",
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pixmap = _build_trend_pixmap(
+            values=ctx["values"],
+            metric=ctx["metric"],
+            title=f"{ctx['mode']} / {ctx['metric']} / {ctx['key']} / {ctx['window']}",
+            width=max(960, self.trend_visual.width()),
+            height=max(260, self.trend_visual.height()),
+        )
+        if not pixmap.save(str(path), "PNG"):
+            QMessageBox.warning(self, "Export chart", f"Failed to save chart:\n{path}")
+            return
+        QMessageBox.information(self, "Export chart", f"Chart saved:\n{path}")
+
     def _refresh_recent_projects(self) -> None:
         self.recent_projects_list.clear()
         roots = self.history.get("project_root", limit=12)
@@ -541,6 +606,129 @@ class ProjectsPage(Page):
             if not exists:
                 item.setForeground(self.palette().mid())
             self.recent_projects_list.addItem(item)
+
+
+def _build_empty_trend_pixmap(message: str) -> QPixmap:
+    pixmap = QPixmap(900, 220)
+    pixmap.fill(QColor("#0f141c"))
+    painter = QPainter(pixmap)
+    painter.setPen(QColor("#8a90a2"))
+    painter.setFont(QFont("Segoe UI", 12))
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, message)
+    painter.end()
+    return pixmap
+
+
+def _build_trend_pixmap(
+    *,
+    values: list[float | None],
+    metric: str,
+    title: str,
+    width: int = 900,
+    height: int = 220,
+) -> QPixmap:
+    w = max(640, int(width))
+    h = max(180, int(height))
+    pixmap = QPixmap(w, h)
+    pixmap.fill(QColor("#0f141c"))
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    margin_left = 56
+    margin_right = 20
+    margin_top = 30
+    margin_bottom = 34
+    plot_w = max(120, w - margin_left - margin_right)
+    plot_h = max(80, h - margin_top - margin_bottom)
+    x0 = margin_left
+    y0 = margin_top
+    x1 = x0 + plot_w
+    y1 = y0 + plot_h
+
+    painter.setPen(QPen(QColor("#3a4354"), 1))
+    for i in range(5):
+        y = y0 + int((plot_h * i) / 4)
+        painter.drawLine(x0, y, x1, y)
+
+    painter.setPen(QPen(QColor("#5f6a80"), 1))
+    painter.drawLine(x0, y1, x1, y1)
+    painter.drawLine(x0, y0, x0, y1)
+
+    present = [(idx, val) for idx, val in enumerate(values) if val is not None]
+    if not present:
+        painter.setPen(QColor("#8a90a2"))
+        painter.setFont(QFont("Segoe UI", 10))
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "No values to plot")
+        painter.end()
+        return pixmap
+
+    raw_vals = [float(val) for _, val in present]
+    min_v = min(raw_vals)
+    max_v = max(raw_vals)
+    if max_v == min_v:
+        padding = max(1.0, abs(max_v) * 0.1)
+        min_v -= padding
+        max_v += padding
+
+    def _x_for_index(index: int) -> int:
+        if len(values) <= 1:
+            return x0
+        return x0 + int((plot_w * index) / (len(values) - 1))
+
+    def _y_for_value(value: float) -> int:
+        ratio = (value - min_v) / (max_v - min_v)
+        ratio = max(0.0, min(1.0, ratio))
+        return y1 - int(plot_h * ratio)
+
+    is_count_metric = metric in {"cases", "failed"}
+    if is_count_metric:
+        painter.setPen(QPen(QColor("#59a2ff"), 1))
+        painter.setBrush(QColor("#2f6fb8"))
+        bar_w = max(6, int(plot_w / max(8, len(values) * 2)))
+        for idx, val in present:
+            x = _x_for_index(idx) - bar_w // 2
+            y = _y_for_value(float(val))
+            painter.drawRect(x, y, bar_w, y1 - y)
+    else:
+        painter.setPen(QPen(QColor("#59a2ff"), 2))
+        prev_point: tuple[int, int] | None = None
+        for idx, val in present:
+            x = _x_for_index(idx)
+            y = _y_for_value(float(val))
+            if prev_point is not None:
+                painter.drawLine(prev_point[0], prev_point[1], x, y)
+            prev_point = (x, y)
+        painter.setPen(QPen(QColor("#a7d0ff"), 1))
+        painter.setBrush(QColor("#a7d0ff"))
+        for idx, val in present:
+            x = _x_for_index(idx)
+            y = _y_for_value(float(val))
+            painter.drawEllipse(x - 2, y - 2, 4, 4)
+
+    painter.setPen(QColor("#8a90a2"))
+    painter.setFont(QFont("Segoe UI", 9))
+    painter.drawText(8, y0 + 6, _metric_value_text(max_v, metric))
+    painter.drawText(8, y1 + 4, _metric_value_text(min_v, metric))
+    painter.drawText(x0, h - 10, "old")
+    painter.drawText(x1 - 32, h - 10, "new")
+
+    latest_idx, latest_val = present[-1]
+    latest_y = _y_for_value(float(latest_val))
+    latest_x = _x_for_index(latest_idx)
+    painter.setPen(QPen(QColor("#efcf78"), 1))
+    painter.drawLine(latest_x, y0, latest_x, y1)
+    painter.setPen(QColor("#efcf78"))
+    painter.drawText(
+        min(x1 - 180, latest_x + 8),
+        max(y0 + 12, latest_y - 8),
+        f"latest: {_metric_value_text(float(latest_val), metric)}",
+    )
+
+    painter.setPen(QColor("#d6dae5"))
+    painter.setFont(QFont("Segoe UI Semibold", 10))
+    painter.drawText(10, 18, title)
+    painter.end()
+    return pixmap
 
 
 def _pct(value: float | None) -> str:
