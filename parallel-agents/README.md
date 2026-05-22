@@ -85,7 +85,13 @@ parallel-agents run --output patch --repo ./project "Fix bugs" > fix.patch
 
 # Run a benchmark dataset
 parallel-agents eval run --dataset examples/eval_dataset.json --repo-root .
+parallel-agents eval annotate --results eval/results.json --annotations eval/annotations.json --in-place
+parallel-agents eval sync-pr --results eval/results.json --links eval/pr_links.json --in-place
+parallel-agents eval sync-ci --results eval/results.json --outcomes eval/ci_outcomes.json --in-place
 parallel-agents eval score --results eval/results.json --output-report eval/report.md --output-json eval/score.json
+parallel-agents eval compare --baseline-results eval/baseline-results.json --candidate-results eval/results.json --output-report eval/compare.md --output-json eval/compare.json
+parallel-agents eval breakdown --results eval/results.json --output-report eval/breakdown.md --output-json eval/breakdown.json
+parallel-agents eval gate --results eval/results.json --min-weighted-impact 0.05 --max-regression-rate 0.10 --min-acceptance-rate 0.70
 
 # Build company workflow artifacts
 parallel-agents company idea "Build a no-code repo quality office" --output company/brief.json
@@ -94,7 +100,7 @@ parallel-agents company roadmap --brief company/brief.json --output company/road
 parallel-agents company sprint --roadmap company/roadmap.json --milestone M1 --output company/sprint.json
 parallel-agents company plan --roadmap company/roadmap.json --repo owner/repo --dry-run --output company/issue-plan.json
 parallel-agents company release-check --repo ./my-project --output company/release-check.json
-parallel-agents company post-release --release-id v0.4.2 --release-check company/release-check.json --output company/post-release.json
+parallel-agents company post-release --release-id v0.4.3 --release-check company/release-check.json --output company/post-release.json
 parallel-agents company templates --roadmap company/roadmap.json --output company/templates.json
 parallel-agents company branch-name --issue RM-01 --title "Define product and workflow artifacts"
 parallel-agents company artifacts --run-id run-123
@@ -137,7 +143,7 @@ parallel-agents gateway start --api-key my-secret
 | `parallel-agents init` | Generate default configuration |
 | `parallel-agents company ...` | Generate company workflow artifacts (brief, stack, RFC, roadmap, issue plan, release checks) |
 | `parallel-agents office ...` | Create and inspect a local `.parallel-agents/` project workspace |
-| `parallel-agents eval run/score` | Run and score productivity/effectiveness benchmarks |
+| `parallel-agents eval run/annotate/sync-pr/sync-ci/score/compare/breakdown/gate` | Run, annotate, auto-sync PR acceptance and CI regressions, score, compare, break down cost/time, and quality-gate productivity/effectiveness benchmarks |
 | `parallel-agents gateway start` | Start the local project/run/job API |
 
 ## Local Project Office
@@ -296,6 +302,7 @@ export PA_STORE_BACKEND=sqlite
 Use the built-in evaluation flow to measure productivity and effectiveness over a fixed benchmark set.
 
 1. Create or edit a dataset JSON (see `examples/eval_dataset.json`).
+   You can also start from `examples/public_benchmark_v1.json`.
 2. Run benchmark execution:
 
 ```bash
@@ -305,12 +312,32 @@ parallel-agents eval run \
   --output eval/results.json
 ```
 
-3. Fill manual annotation fields in `eval/results.json` per case:
-   - `accepted_without_major_edits`
-   - `introduced_regression`
-   - `findings_true_positives`
-   - `findings_false_positives`
-   - `reviewer_minutes`
+3. Apply per-case annotations (acceptance, regressions, findings, reviewer time):
+
+```bash
+parallel-agents eval annotate \
+  --results eval/results.json \
+  --annotations eval/annotations.json \
+  --in-place
+```
+
+`eval/annotations.json` format:
+
+```json
+[
+  {
+    "case_id": "SEC-001",
+    "accepted_without_major_edits": true,
+    "introduced_regression": false,
+    "findings_true_positives": 4,
+    "findings_false_positives": 1,
+    "reviewer_minutes": 12
+  }
+]
+```
+
+You can copy from `examples/eval_annotations_example.json`.
+
 4. Compute score and report:
 
 ```bash
@@ -318,7 +345,72 @@ parallel-agents eval score \
   --results eval/results.json \
   --output-json eval/score.json \
   --output-report eval/report.md
+
+# Compare candidate run vs baseline
+parallel-agents eval compare \
+  --baseline-results eval/baseline-results.json \
+  --candidate-results eval/results.json \
+  --output-json eval/compare.json \
+  --output-report eval/compare.md
+
+# CI gate (non-zero exit code when thresholds fail)
+parallel-agents eval gate \
+  --results eval/results.json \
+  --min-weighted-impact 0.05 \
+  --max-regression-rate 0.10 \
+  --min-acceptance-rate 0.70 \
+  --min-finding-precision 0.75
+
+parallel-agents eval breakdown \
+  --results eval/results.json \
+  --output-json eval/breakdown.json \
+  --output-report eval/breakdown.md
 ```
+
+Optional PR acceptance sync from GitHub:
+
+```bash
+parallel-agents eval sync-pr \
+  --results eval/results.json \
+  --links eval/pr_links.json \
+  --in-place
+```
+
+`eval/pr_links.json` format:
+
+```json
+[
+  {
+    "case_id": "SEC-001",
+    "pr_url": "https://github.com/org/repo/pull/123"
+  }
+]
+```
+
+You can copy from `examples/eval_pr_links_example.json`.
+
+Optional CI regression sync:
+
+```bash
+parallel-agents eval sync-ci \
+  --results eval/results.json \
+  --outcomes eval/ci_outcomes.json \
+  --in-place
+```
+
+`eval/ci_outcomes.json` format:
+
+```json
+[
+  {
+    "case_id": "SEC-001",
+    "ci_passed": false,
+    "source": "github-actions"
+  }
+]
+```
+
+You can copy from `examples/eval_ci_outcomes_example.json`.
 
 Scoring includes:
 - speed gain vs baseline human minutes
@@ -327,6 +419,8 @@ Scoring includes:
 - finding precision
 - weighted delivery impact score:
   `0.4*speed_gain + 0.4*acceptance_gain - 0.2*regression_increase`
+
+`eval gate` returns non-zero when thresholds fail, so it can be used in CI/release gates.
 
 ## Project Docs
 

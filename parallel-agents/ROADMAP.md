@@ -137,15 +137,21 @@ Completed:
 - Evaluation dataset format.
 - `parallel-agents eval run`.
 - `parallel-agents eval score`.
+- `parallel-agents eval compare` for baseline vs candidate delta reporting.
+- `parallel-agents eval gate` for CI/release threshold enforcement.
+- `parallel-agents eval annotate` for run-level acceptance/regression/finding updates.
+- `parallel-agents eval sync-pr` for GitHub PR acceptance ingestion.
+- `parallel-agents eval sync-ci` for CI outcome regression ingestion.
+- `parallel-agents eval breakdown` for cost/time views by project and workflow.
 - Scorecards for speed gain, acceptance rate, regression rate, finding precision, and weighted delivery impact.
+- Starter public benchmark dataset (`examples/public_benchmark_v1.json`).
 
 Remaining:
 
-- Public benchmark dataset.
-- Run comparison reports.
-- PR acceptance tracking.
-- Regression tracking from CI outcomes.
-- Cost and time views.
+- Broader public benchmark dataset coverage.
+- PR acceptance tracking is integrated through `eval sync-pr` and PR link files.
+- Regression tracking from CI outcomes is integrated through `eval sync-ci`.
+- Cost/time views by workflow and project are integrated through `eval breakdown`.
 
 ## Near-Term Priority
 

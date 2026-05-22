@@ -34,10 +34,35 @@ class GitHubMilestone:
     url: str = ""
 
 
+@dataclass
+class GitHubPullRequest:
+    number: int
+    title: str
+    state: str
+    url: str
+    merged_at: str | None = None
+    review_decision: str | None = None
+    changes_requested_count: int = 0
+    approved_count: int = 0
+    changed_files: int = 0
+    additions: int = 0
+    deletions: int = 0
+
+
 def parse_github_url(url: str) -> tuple[str, str, int] | None:
     """Parse a GitHub issue URL into (owner, repo, issue_number)."""
     match = re.match(
         r"https?://github\.com/([^/]+)/([^/]+)/issues/(\d+)", url
+    )
+    if match:
+        return match.group(1), match.group(2), int(match.group(3))
+    return None
+
+
+def parse_pr_url(url: str) -> tuple[str, str, int] | None:
+    """Parse a GitHub PR URL into (owner, repo, pull_number)."""
+    match = re.match(
+        r"https?://github\.com/([^/]+)/([^/]+)/pull(?:s)?/(\d+)", url
     )
     if match:
         return match.group(1), match.group(2), int(match.group(3))
@@ -116,6 +141,56 @@ async def fetch_issue(url: str) -> GitHubIssue | None:
         )
     except (json.JSONDecodeError, KeyError) as e:
         logger.error("Failed to parse issue data: %s", e)
+        return None
+
+
+async def fetch_pull_request(url: str) -> GitHubPullRequest | None:
+    """Fetch a GitHub PR by URL using the `gh` CLI."""
+    parsed = parse_pr_url(url)
+    if not parsed:
+        logger.error("Invalid GitHub PR URL: %s", url)
+        return None
+
+    owner, repo, number = parsed
+    if not _gh_available():
+        logger.warning("gh CLI not found. Cannot fetch PR.")
+        return None
+
+    stdout, rc = await _run_gh(
+        "pr",
+        "view",
+        str(number),
+        "--repo",
+        f"{owner}/{repo}",
+        "--json",
+        "number,title,state,url,mergedAt,reviewDecision,reviews,changedFiles,additions,deletions",
+    )
+    if rc != 0:
+        return None
+
+    try:
+        data = json.loads(stdout)
+        reviews = data.get("reviews", [])
+        states = [str(review.get("state", "")).upper() for review in reviews]
+        changes_requested_count = sum(1 for state in states if state == "CHANGES_REQUESTED")
+        approved_count = sum(1 for state in states if state == "APPROVED")
+        return GitHubPullRequest(
+            number=int(data["number"]),
+            title=str(data.get("title", "")),
+            state=str(data.get("state", "")),
+            url=str(data.get("url", url)),
+            merged_at=data.get("mergedAt"),
+            review_decision=(
+                str(data["reviewDecision"]) if data.get("reviewDecision") is not None else None
+            ),
+            changes_requested_count=changes_requested_count,
+            approved_count=approved_count,
+            changed_files=int(data.get("changedFiles", 0) or 0),
+            additions=int(data.get("additions", 0) or 0),
+            deletions=int(data.get("deletions", 0) or 0),
+        )
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        logger.error("Failed to parse PR data: %s", exc)
         return None
 
 

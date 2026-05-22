@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "parallel-agents"
-version = "0.4.2"
+version = "0.4.3"
 description = "Parallel multi-agent pipeline for code analysis and transformation."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -94,7 +94,7 @@ include = [
     "CONTRIBUTING.md",
     "SECURITY.md",
     "SUPPORT.md",
-    "examples/eval_dataset.json",
+    "examples/*.json",
     "LICENSE",
     "pyproject.toml",
 ]

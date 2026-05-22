@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+- No changes yet.
+
+## [0.4.3] - 2026-05-22
+
 ### Added
 - Gateway queue hardening:
   - run listing endpoint (`GET /runs`)
@@ -28,6 +32,17 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - standalone binary spec includes the project-office module
 - New gateway workflow doc: `docs/workflows/gateway-api.md`
 - New desktop office workflow doc: `docs/workflows/local-desktop-office.md`
+- Evaluation workflow extensions:
+  - `parallel-agents eval annotate` to apply per-case annotation updates from JSON
+  - `parallel-agents eval sync-pr` to auto-sync acceptance annotations from GitHub PR outcomes
+  - `parallel-agents eval sync-ci` to auto-sync regression annotations from CI pass/fail outcomes
+  - `parallel-agents eval compare` for baseline/candidate delta reports
+  - `parallel-agents eval breakdown` for project/workflow cost and time views
+  - `parallel-agents eval gate` for CI threshold enforcement
+  - aggregate cost/time summaries in evaluation markdown reports
+- Starter public benchmark dataset: `examples/public_benchmark_v1.json`
+- Example PR links file: `examples/eval_pr_links_example.json`
+- Example CI outcomes file: `examples/eval_ci_outcomes_example.json`
 
 ### Changed
 - README now documents local project-office usage, gateway endpoints, queue behavior, and auth usage.
