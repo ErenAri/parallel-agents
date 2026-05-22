@@ -13,6 +13,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - runs page now executes real pipeline runs
   - live run activity stream and worker status updates during execution
   - artifact compare against previous runs with inline unified diff view
+  - release/productivity summary card from eval artifacts (impact, acceptance, regression, gate, cost, duration)
   - approvals queue filters and approved-plan apply action
   - GitHub PR creation flow from desktop with run-linked PR summary artifact
 

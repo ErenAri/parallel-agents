@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import pytest
 
 from parallel_agents.desktop.services import engine as engine_module
 from parallel_agents.desktop.services.engine import EngineService
+from parallel_agents.eval_harness import (
+    EvaluationAggregate,
+    EvaluationAnnotations,
+    EvaluationBreakdown,
+    EvaluationBreakdownBucket,
+    EvaluationGateResult,
+    EvaluationResults,
+    EvaluationRunRecord,
+    EvaluationScore,
+)
 from parallel_agents.models import FinalOutput, WorkerResult
 from parallel_agents.project_office import office_dir
 
@@ -93,3 +104,142 @@ def test_run_pipeline_requires_run_id(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="run_id"):
         asyncio.run(service.run_pipeline("Run without id"))
+
+
+def test_productivity_snapshot_reads_score_gate_and_breakdown(tmp_path):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    metrics_dir = office_dir(tmp_path) / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    score = EvaluationScore(
+        case_count=6,
+        completed_count=6,
+        failed_count=0,
+        weighted_delivery_impact_score=0.18,
+        acceptance_rate=0.82,
+        regression_rate=0.05,
+        finding_precision=0.75,
+    )
+    aggregate = EvaluationAggregate(
+        case_count=6,
+        completed_count=6,
+        failed_count=0,
+        total_cost_usd=2.4,
+        total_duration_seconds=480.0,
+    )
+    gate = EvaluationGateResult(
+        passed=False,
+        failed_rules=["regression_rate above maximum (0.05 > 0.03)"],
+        score=score,
+        aggregate=aggregate,
+    )
+    breakdown = EvaluationBreakdown(
+        by_project=[
+            EvaluationBreakdownBucket(
+                key="C:/repo-a",
+                case_count=4,
+                completed_count=4,
+                failed_count=0,
+                parse_error_count=0,
+                worker_error_count=0,
+                total_cost_usd=1.8,
+                total_duration_seconds=320.0,
+            )
+        ],
+        by_workflow=[
+            EvaluationBreakdownBucket(
+                key="RELEASE",
+                case_count=3,
+                completed_count=3,
+                failed_count=0,
+                parse_error_count=0,
+                worker_error_count=0,
+                total_cost_usd=1.1,
+                total_duration_seconds=210.0,
+            )
+        ],
+    )
+
+    (metrics_dir / "eval-score.json").write_text(
+        score.model_dump_json(indent=2), encoding="utf-8"
+    )
+    (metrics_dir / "eval-gate.json").write_text(
+        gate.model_dump_json(indent=2), encoding="utf-8"
+    )
+    (metrics_dir / "eval-breakdown.json").write_text(
+        breakdown.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    snapshot = service.productivity_snapshot()
+
+    assert snapshot.score_path is not None
+    assert snapshot.gate_path is not None
+    assert snapshot.breakdown_path is not None
+    assert snapshot.weighted_delivery_impact_score == pytest.approx(0.18)
+    assert snapshot.acceptance_rate == pytest.approx(0.82)
+    assert snapshot.regression_rate == pytest.approx(0.05)
+    assert snapshot.finding_precision == pytest.approx(0.75)
+    assert snapshot.case_count == 6
+    assert snapshot.completed_count == 6
+    assert snapshot.failed_count == 0
+    assert snapshot.total_cost_usd == pytest.approx(2.4)
+    assert snapshot.total_duration_seconds == pytest.approx(480.0)
+    assert snapshot.gate_passed is False
+    assert snapshot.gate_failed_rules
+    assert snapshot.top_project == "C:/repo-a"
+    assert snapshot.top_workflow == "RELEASE"
+
+
+def test_productivity_snapshot_falls_back_to_results_when_score_missing(tmp_path):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    eval_dir = tmp_path / "eval"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now(timezone.utc)
+    results = EvaluationResults(
+        dataset_name="local-dataset",
+        dataset_path=str(eval_dir / "dataset.json"),
+        runs=[
+            EvaluationRunRecord(
+                case_id="release-01",
+                task="check release readiness",
+                started_at=now,
+                completed_at=now,
+                duration_seconds=45.0,
+                status="success",
+                run_id="abc123",
+                summary="ok",
+                patch_generated=True,
+                findings_count=2,
+                recommendations_count=1,
+                worker_error_count=0,
+                total_tokens=1100,
+                total_cost_usd=0.42,
+                annotations=EvaluationAnnotations(
+                    accepted_without_major_edits=True,
+                    introduced_regression=False,
+                    findings_true_positives=2,
+                    findings_false_positives=0,
+                ),
+            )
+        ],
+    )
+    (eval_dir / "results.json").write_text(
+        results.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    snapshot = service.productivity_snapshot()
+
+    assert snapshot.results_path is not None
+    assert snapshot.score_path is None
+    assert snapshot.case_count == 1
+    assert snapshot.completed_count == 1
+    assert snapshot.failed_count == 0
+    assert snapshot.total_cost_usd == pytest.approx(0.42)
+    assert snapshot.total_duration_seconds == pytest.approx(45.0)
+    assert snapshot.notes
+    assert any("Computed score from results artifact." in note for note in snapshot.notes)

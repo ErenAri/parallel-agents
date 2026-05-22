@@ -31,6 +31,15 @@ from parallel_agents.company_workflows import (
     create_product_brief,
     recommend_tech_stack,
 )
+from parallel_agents.eval_harness import (
+    EvaluationAggregate,
+    EvaluationBreakdown,
+    EvaluationGateResult,
+    EvaluationResults,
+    EvaluationScore,
+    compute_evaluation_score,
+    summarize_evaluation_results,
+)
 from parallel_agents.project_office import (
     init_project_office,
     list_office_run_ids,
@@ -80,6 +89,29 @@ class WorkspaceHome:
     latest_run_id: str | None
     current_branch: str | None
     recent_runs: list[dict[str, Any]]
+
+
+@dataclass
+class ProductivitySnapshot:
+    generated_at: str | None
+    score_path: Path | None
+    breakdown_path: Path | None
+    gate_path: Path | None
+    results_path: Path | None
+    weighted_delivery_impact_score: float | None
+    acceptance_rate: float | None
+    regression_rate: float | None
+    finding_precision: float | None
+    case_count: int | None
+    completed_count: int | None
+    failed_count: int | None
+    total_cost_usd: float | None
+    total_duration_seconds: float | None
+    gate_passed: bool | None
+    gate_failed_rules: list[str]
+    top_project: str | None
+    top_workflow: str | None
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -503,6 +535,100 @@ class EngineService:
             recent_runs=recent_runs[:8],
         )
 
+    def productivity_snapshot(self) -> ProductivitySnapshot:
+        root = self.require_project()
+        office_metrics_dir = office_dir(root) / "metrics"
+        project_eval_dir = root / "eval"
+
+        score_path = self._latest_existing_path(
+            office_metrics_dir,
+            ["*score*.json"],
+        ) or self._latest_existing_path(project_eval_dir, ["*score*.json"])
+        gate_path = self._latest_existing_path(
+            office_metrics_dir,
+            ["*gate*.json"],
+        ) or self._latest_existing_path(project_eval_dir, ["*gate*.json"])
+        breakdown_path = self._latest_existing_path(
+            office_metrics_dir,
+            ["*breakdown*.json"],
+        ) or self._latest_existing_path(project_eval_dir, ["*breakdown*.json"])
+        results_path = self._latest_existing_path(
+            office_metrics_dir,
+            ["*results*.json"],
+        ) or self._latest_existing_path(project_eval_dir, ["*results*.json"])
+
+        notes: list[str] = []
+
+        score_obj = self._load_model(score_path, EvaluationScore)
+        if score_path and score_obj is None:
+            notes.append(f"Could not parse score file: {score_path.name}")
+
+        gate_obj = self._load_model(gate_path, EvaluationGateResult)
+        if gate_path and gate_obj is None:
+            notes.append(f"Could not parse gate file: {gate_path.name}")
+
+        aggregate: EvaluationAggregate | None = None
+        if gate_obj is not None:
+            aggregate = gate_obj.aggregate
+            if score_obj is None:
+                score_obj = gate_obj.score
+                notes.append("Using score from gate artifact.")
+
+        if score_obj is None and results_path is not None:
+            results_obj = self._load_model(results_path, EvaluationResults)
+            if results_obj is None:
+                notes.append(f"Could not parse results file: {results_path.name}")
+            else:
+                score_obj = compute_evaluation_score(results_obj)
+                aggregate = summarize_evaluation_results(results_obj)
+                notes.append("Computed score from results artifact.")
+
+        top_project: str | None = None
+        top_workflow: str | None = None
+        breakdown_obj = self._load_model(breakdown_path, EvaluationBreakdown)
+        if breakdown_path and breakdown_obj is None:
+            notes.append(f"Could not parse breakdown file: {breakdown_path.name}")
+        if breakdown_obj is not None:
+            if breakdown_obj.by_project:
+                top_project = breakdown_obj.by_project[0].key
+            if breakdown_obj.by_workflow:
+                top_workflow = breakdown_obj.by_workflow[0].key
+
+        if score_obj is None:
+            notes.append("No evaluation score artifact found yet.")
+
+        return ProductivitySnapshot(
+            generated_at=(
+                score_obj.generated_at.isoformat()
+                if score_obj is not None
+                else None
+            ),
+            score_path=score_path,
+            breakdown_path=breakdown_path,
+            gate_path=gate_path,
+            results_path=results_path,
+            weighted_delivery_impact_score=(
+                score_obj.weighted_delivery_impact_score
+                if score_obj is not None
+                else None
+            ),
+            acceptance_rate=score_obj.acceptance_rate if score_obj is not None else None,
+            regression_rate=score_obj.regression_rate if score_obj is not None else None,
+            finding_precision=score_obj.finding_precision if score_obj is not None else None,
+            case_count=score_obj.case_count if score_obj is not None else None,
+            completed_count=score_obj.completed_count if score_obj is not None else None,
+            failed_count=score_obj.failed_count if score_obj is not None else None,
+            total_cost_usd=aggregate.total_cost_usd if aggregate is not None else None,
+            total_duration_seconds=(
+                aggregate.total_duration_seconds if aggregate is not None else None
+            ),
+            gate_passed=gate_obj.passed if gate_obj is not None else None,
+            gate_failed_rules=(gate_obj.failed_rules if gate_obj is not None else []),
+            top_project=top_project,
+            top_workflow=top_workflow,
+            notes=notes,
+        )
+
     def latest_run_id(self) -> str | None:
         runs = list_office_run_ids(self._current_project) if self._current_project else []
         return runs[0] if runs else None
@@ -809,6 +935,32 @@ class EngineService:
             return None
         branch = proc.stdout.strip()
         return branch or None
+
+    @staticmethod
+    def _latest_existing_path(base_dir: Path, patterns: list[str]) -> Path | None:
+        if not base_dir.exists():
+            return None
+        candidates: list[Path] = []
+        for pattern in patterns:
+            for path in base_dir.glob(pattern):
+                if path.is_file():
+                    candidates.append(path)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+
+    @staticmethod
+    def _load_model(path: Path | None, model_cls):
+        if path is None or not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        try:
+            return model_cls.model_validate(payload)
+        except Exception:
+            return None
 
 
 def _stat_iso(path: Path) -> str:

@@ -60,6 +60,22 @@ class ProjectsPage(Page):
         card_layout.addWidget(self.current_stats)
         self.body_layout.addWidget(self.current_card)
 
+        self.productivity_card = QFrame()
+        self.productivity_card.setObjectName("Card")
+        productivity_layout = QVBoxLayout(self.productivity_card)
+        productivity_layout.setContentsMargins(20, 16, 20, 16)
+        self.productivity_label = QLabel("Release & Productivity")
+        self.productivity_label.setStyleSheet("font-size: 15px; font-weight: 600;")
+        self.productivity_meta = QLabel("No evaluation artifacts detected yet.")
+        self.productivity_meta.setStyleSheet("color: #8a90a2;")
+        self.productivity_stats = QLabel("")
+        self.productivity_stats.setStyleSheet("color: #8a90a2;")
+        self.productivity_stats.setWordWrap(True)
+        productivity_layout.addWidget(self.productivity_label)
+        productivity_layout.addWidget(self.productivity_meta)
+        productivity_layout.addWidget(self.productivity_stats)
+        self.body_layout.addWidget(self.productivity_card)
+
         recent_projects_title = QLabel("Recent Project Folders")
         recent_projects_title.setStyleSheet("font-weight: 600; padding-top: 8px;")
         self.body_layout.addWidget(recent_projects_title)
@@ -150,12 +166,58 @@ class ProjectsPage(Page):
             f"{home.run_count}  |  Artifacts: {home.artifact_count}  |  Pending approvals: {home.pending_approval_count}"
             + (f"  |  Branch: {home.current_branch}" if home.current_branch else "")
         )
+        self._refresh_productivity()
         self.recent_list.clear()
         for run in self.engine.list_runs():
             item = QListWidgetItem(f"{run['id']}   {run.get('created_at', '')}")
             item.setData(Qt.ItemDataRole.UserRole, run["id"])
             self.recent_list.addItem(item)
         self.project_opened.emit(info)
+
+    def _refresh_productivity(self) -> None:
+        snapshot = self.engine.productivity_snapshot()
+        source_bits: list[str] = []
+        if snapshot.score_path is not None:
+            source_bits.append(f"score: {snapshot.score_path.name}")
+        if snapshot.gate_path is not None:
+            source_bits.append(f"gate: {snapshot.gate_path.name}")
+        if snapshot.breakdown_path is not None:
+            source_bits.append(f"breakdown: {snapshot.breakdown_path.name}")
+
+        if not source_bits:
+            self.productivity_meta.setText(
+                "No eval artifacts found in .parallel-agents/metrics or eval/."
+            )
+            self.productivity_stats.setText(
+                "Run `parallel-agents eval score` (and optionally `eval breakdown`, `eval gate`) to populate this view."
+            )
+            return
+
+        generated = snapshot.generated_at or "unknown time"
+        self.productivity_meta.setText(
+            f"Generated: {generated}  |  Sources: {', '.join(source_bits)}"
+        )
+
+        lines = [
+            f"Impact: {_pct(snapshot.weighted_delivery_impact_score)}",
+            f"Acceptance: {_pct(snapshot.acceptance_rate)}",
+            f"Regression: {_pct(snapshot.regression_rate)}",
+            f"Precision: {_pct(snapshot.finding_precision)}",
+            f"Cases: {_num(snapshot.case_count)} (completed {_num(snapshot.completed_count)}, failed {_num(snapshot.failed_count)})",
+            f"Cost: {_usd(snapshot.total_cost_usd)}  |  Duration: {_duration(snapshot.total_duration_seconds)}",
+        ]
+        if snapshot.gate_passed is not None:
+            gate_status = "passed" if snapshot.gate_passed else "failed"
+            lines.append(f"Release gate: {gate_status}")
+            if snapshot.gate_failed_rules:
+                lines.append(f"Gate rules: {'; '.join(snapshot.gate_failed_rules)}")
+        if snapshot.top_project:
+            lines.append(f"Top project bucket: {snapshot.top_project}")
+        if snapshot.top_workflow:
+            lines.append(f"Top workflow bucket: {snapshot.top_workflow}")
+        if snapshot.notes:
+            lines.append(f"Notes: {'; '.join(snapshot.notes)}")
+        self.productivity_stats.setText("\n".join(lines))
 
     def _refresh_recent_projects(self) -> None:
         self.recent_projects_list.clear()
@@ -174,3 +236,30 @@ class ProjectsPage(Page):
             if not exists:
                 item.setForeground(self.palette().mid())
             self.recent_projects_list.addItem(item)
+
+
+def _pct(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value * 100:.2f}%"
+
+
+def _usd(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"${value:.4f}"
+
+
+def _duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = seconds / 60.0
+    return f"{minutes:.1f}m"
+
+
+def _num(value: int | None) -> str:
+    if value is None:
+        return "n/a"
+    return str(value)

@@ -107,11 +107,12 @@ Completed:
 - Desktop approvals queue filters with approved issue-plan apply action.
 - Desktop GitHub PR creation with run-linked PR summary artifact.
 - Desktop Runs page now executes real pipeline runs with live activity streaming and worker status updates.
+- Desktop project-home release/productivity card from eval artifacts (impact, acceptance, regression, gate, cost, duration).
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
-- Richer release and productivity views.
+- Trend charts and historical comparisons for release/productivity metrics across runs.
 
 ## Phase 5: Remote MCP Product Surface
 
