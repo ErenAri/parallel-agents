@@ -131,14 +131,18 @@ Goal: use Parallel Agents Office inside Claude, ChatGPT, Codex, Cursor, and simi
 Completed:
 
 - MCP tool discovery surface (`tool_discovery`) with read/write classification and approval-gate metadata.
+- Gateway-hosted MCP tool surface:
+  - `GET /mcp/tools` for capability discovery
+  - `POST /mcp/tools/{tool_name}` for remote tool invocation
+  - remote write-tool policy gate (`PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS` / `--allow-remote-write-tools`)
+- Workspace access audit trail for gateway traffic (`GET /audit/access`).
 
 Remaining:
 
 - Hosted MCP endpoint.
 - OAuth.
-- Remote public read-only access model.
-- Remote write tools behind approval.
-- Workspace audit trail for hosted traffic.
+- Remote public read-only access model with tenant/session identities.
+- Remote write tools behind approval with OAuth/session claims.
 
 ## Phase 6: Proof and Evaluation
 

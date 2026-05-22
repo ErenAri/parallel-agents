@@ -5,6 +5,7 @@ import base64
 from contextlib import asynccontextmanager
 import hashlib
 import hmac
+import inspect
 import json
 import os
 import queue
@@ -122,6 +123,12 @@ def _resolve_gateway_jwt_audience(jwt_audience: str | None) -> str | None:
     return cleaned or None
 
 
+def _resolve_gateway_allow_remote_write_tools(value: bool | str | None) -> bool:
+    if value is None:
+        return _as_bool(os.getenv("PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS"), default=False)
+    return _as_bool(value, default=False)
+
+
 def _decode_b64url(segment: str) -> bytes:
     padded = segment + ("=" * (-len(segment) % 4))
     return base64.urlsafe_b64decode(padded.encode("utf-8"))
@@ -186,6 +193,19 @@ def _is_valid_hs256_jwt(
             return False
 
     return True
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any] | None:
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = json.loads(_decode_b64url(parts[1]).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
 
 
 class GatewayStore:
@@ -477,6 +497,66 @@ class GatewayStore:
             events.append(payload)
         return events
 
+    def add_access_audit(
+        self,
+        *,
+        method: str,
+        path: str,
+        status_code: int,
+        auth_mode: str,
+        principal: str,
+        allowed: bool,
+        detail: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "timestamp": _utc_now(),
+            "method": method,
+            "path": path,
+            "status_code": int(status_code),
+            "auth_mode": auth_mode,
+            "principal": principal,
+            "allowed": bool(allowed),
+            "detail": detail or "",
+        }
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO access_audit (
+                    timestamp, method, path, status_code, auth_mode, principal, allowed, detail
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["timestamp"],
+                    payload["method"],
+                    payload["path"],
+                    payload["status_code"],
+                    payload["auth_mode"],
+                    payload["principal"],
+                    1 if payload["allowed"] else 0,
+                    payload["detail"],
+                ),
+            )
+            payload["id"] = int(cursor.lastrowid)
+        return payload
+
+    def list_access_audit(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM access_audit
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload = _row_to_dict(row)
+            payload["allowed"] = bool(payload.get("allowed"))
+            items.append(payload)
+        return items
+
     def get_metrics_summary(self) -> dict[str, Any]:
         with self._connect() as conn:
             project_count = int(conn.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"])
@@ -583,6 +663,18 @@ class GatewayStore:
                     timestamp TEXT NOT NULL,
                     event TEXT NOT NULL,
                     payload_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS access_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    status_code INTEGER NOT NULL,
+                    auth_mode TEXT NOT NULL,
+                    principal TEXT NOT NULL,
+                    allowed INTEGER NOT NULL,
+                    detail TEXT
                 );
                 """
             )
@@ -745,6 +837,7 @@ def create_gateway_app(
     jwt_secret: str | None = None,
     jwt_issuer: str | None = None,
     jwt_audience: str | None = None,
+    allow_remote_write_tools: bool | str | None = None,
 ):
     try:
         from fastapi import FastAPI, HTTPException, Request
@@ -759,6 +852,9 @@ def create_gateway_app(
     resolved_jwt_secret = _resolve_gateway_jwt_secret(jwt_secret)
     resolved_jwt_issuer = _resolve_gateway_jwt_issuer(jwt_issuer)
     resolved_jwt_audience = _resolve_gateway_jwt_audience(jwt_audience)
+    resolved_allow_remote_write_tools = _resolve_gateway_allow_remote_write_tools(
+        allow_remote_write_tools
+    )
 
     def _run_company_idea(run: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
         payload = dict(run.get("payload") or {})
@@ -973,9 +1069,9 @@ def create_gateway_app(
         lifespan=_lifespan,
     )
 
-    def _request_is_authorized(request: Request) -> bool:
+    def _request_auth_context(request: Request) -> tuple[bool, str, str]:
         if not resolved_api_key and not resolved_jwt_secret:
-            return True
+            return True, "none", "anonymous"
 
         direct = request.headers.get("x-pa-api-key")
         if (
@@ -984,31 +1080,57 @@ def create_gateway_app(
             and direct
             and hmac.compare_digest(direct, resolved_api_key)
         ):
-            return True
+            return True, "api_key", "api-key"
 
         auth_header = request.headers.get("authorization")
         if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
             token = auth_header[7:].strip()
             if resolved_api_key and token and hmac.compare_digest(token, resolved_api_key):
-                return True
+                return True, "api_key", "api-key"
             if resolved_jwt_secret and token and _is_valid_hs256_jwt(
                 token,
                 secret=resolved_jwt_secret,
                 issuer=resolved_jwt_issuer,
                 audience=resolved_jwt_audience,
             ):
-                return True
-        return False
+                claims = _decode_jwt_payload(token) or {}
+                principal = str(
+                    claims.get("sub")
+                    or claims.get("client_id")
+                    or claims.get("email")
+                    or "jwt-subject"
+                )
+                return True, "jwt_hs256", principal
+        return False, "none", "anonymous"
 
     @app.middleware("http")
     async def _api_key_auth_middleware(request: Request, call_next):
-        if not resolved_api_key and not resolved_jwt_secret:
-            return await call_next(request)
         path = request.url.path
-        if path == "/health":
-            return await call_next(request)
-        if _request_is_authorized(request):
-            return await call_next(request)
+        authorized, auth_mode, principal = _request_auth_context(request)
+        auth_required = bool(resolved_api_key or resolved_jwt_secret)
+        bypass_auth = (not auth_required) or (path == "/health")
+
+        if bypass_auth or authorized:
+            response = await call_next(request)
+            store.add_access_audit(
+                method=request.method,
+                path=path,
+                status_code=int(response.status_code),
+                auth_mode=auth_mode,
+                principal=principal,
+                allowed=True,
+            )
+            return response
+
+        store.add_access_audit(
+            method=request.method,
+            path=path,
+            status_code=401,
+            auth_mode=auth_mode,
+            principal=principal,
+            allowed=False,
+            detail="gateway auth required",
+        )
         return JSONResponse(status_code=401, content={"detail": "gateway auth required"})
 
     def _submit_run(
@@ -1071,6 +1193,54 @@ def create_gateway_app(
             "worker_alive": bool(runner._thread and runner._thread.is_alive()),
             "auth_required": bool(resolved_api_key or resolved_jwt_secret),
             "auth_modes": auth_modes,
+            "allow_remote_write_tools": resolved_allow_remote_write_tools,
+        }
+
+    def _gateway_mcp_tools_catalog() -> list[dict[str, Any]]:
+        from parallel_agents.mcp_server import TOOL_CATALOG
+
+        catalog: list[dict[str, Any]] = []
+        for entry in TOOL_CATALOG:
+            item = dict(entry)
+            is_write = str(item.get("access")) == "write"
+            item["remote_enabled"] = (not is_write) or resolved_allow_remote_write_tools
+            catalog.append(item)
+        return catalog
+
+    def _invoke_mcp_tool(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        from parallel_agents import mcp_server
+
+        tool_fn = getattr(mcp_server, tool_name, None)
+        if tool_fn is None or not inspect.iscoroutinefunction(tool_fn):
+            raise ValueError(f"tool not found: {tool_name}")
+
+        signature = inspect.signature(tool_fn)
+        kwargs: dict[str, Any] = {}
+        for name in signature.parameters:
+            if name in payload:
+                kwargs[name] = payload[name]
+        missing_required = [
+            name
+            for name, param in signature.parameters.items()
+            if param.default is inspect._empty and name not in kwargs
+        ]
+        if missing_required:
+            joined = ", ".join(sorted(missing_required))
+            raise ValueError(f"missing required tool parameter(s): {joined}")
+
+        raw_output = asyncio.run(tool_fn(**kwargs))
+        parsed_output: Any = raw_output
+        is_json = False
+        if isinstance(raw_output, str):
+            try:
+                parsed_output = json.loads(raw_output)
+                is_json = True
+            except json.JSONDecodeError:
+                parsed_output = raw_output
+        return {
+            "tool": tool_name,
+            "response": parsed_output,
+            "response_is_json": is_json,
         }
 
     @app.post("/projects")
@@ -1091,6 +1261,50 @@ def create_gateway_app(
         if not project:
             raise HTTPException(status_code=404, detail="project not found")
         return project
+
+    @app.get("/mcp/tools")
+    def list_mcp_tools() -> dict[str, Any]:
+        tools = _gateway_mcp_tools_catalog()
+        return {
+            "tools": tools,
+            "count": len(tools),
+            "allow_remote_write_tools": resolved_allow_remote_write_tools,
+        }
+
+    @app.post("/mcp/tools/{tool_name}")
+    def call_mcp_tool(tool_name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        request_payload = dict(payload) if isinstance(payload, dict) else {}
+        tools = {str(item.get("name")): item for item in _gateway_mcp_tools_catalog()}
+        tool_meta = tools.get(tool_name)
+        if not tool_meta:
+            raise HTTPException(status_code=404, detail=f"unknown mcp tool: {tool_name}")
+
+        if str(tool_meta.get("access")) == "write" and not resolved_allow_remote_write_tools:
+            store.add_access_audit(
+                method="POST",
+                path=f"/mcp/tools/{tool_name}",
+                status_code=403,
+                auth_mode="policy",
+                principal="gateway",
+                allowed=False,
+                detail="remote write MCP tools disabled",
+            )
+            raise HTTPException(status_code=403, detail="remote write MCP tools are disabled")
+
+        try:
+            response_payload = _invoke_mcp_tool(tool_name, request_payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return {
+            "tool": tool_name,
+            "access": tool_meta.get("access"),
+            "approval_required": bool(tool_meta.get("approval_required")),
+            "response": response_payload["response"],
+            "response_is_json": bool(response_payload["response_is_json"]),
+        }
 
     @app.post("/runs/company/idea")
     def run_company_idea(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1244,6 +1458,14 @@ def create_gateway_app(
         jobs = store.list_jobs(run_id)
         return {"run_id": run_id, "jobs": jobs, "count": len(jobs)}
 
+    @app.get("/audit/access")
+    def get_access_audit(limit: int = 200) -> dict[str, Any]:
+        events = store.list_access_audit(limit=limit)
+        return {
+            "events": events,
+            "count": len(events),
+        }
+
     return app
 
 
@@ -1274,6 +1496,7 @@ def run_gateway_server(
     jwt_secret: str | None = None,
     jwt_issuer: str | None = None,
     jwt_audience: str | None = None,
+    allow_remote_write_tools: bool | str | None = None,
 ) -> None:
     try:
         import uvicorn
@@ -1288,5 +1511,6 @@ def run_gateway_server(
         jwt_secret=jwt_secret,
         jwt_issuer=jwt_issuer,
         jwt_audience=jwt_audience,
+        allow_remote_write_tools=allow_remote_write_tools,
     )
     uvicorn.run(app, host=host, port=port)

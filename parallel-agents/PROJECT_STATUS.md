@@ -48,6 +48,12 @@ The current release line is focused on local, reviewable workflows and a project
 - MCP product-surface foundation:
   - `tool_discovery` output with read/write access classes
   - approval-required metadata for write tools
+  - gateway-hosted MCP tool catalog (`GET /mcp/tools`)
+  - gateway-hosted MCP tool invocation (`POST /mcp/tools/{tool_name}`)
+  - remote write-tool toggle (`PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS` / `--allow-remote-write-tools`)
+  - gateway access-audit stream (`GET /audit/access`)
+- Public benchmark publication:
+  - `parallel-agents eval publish` to generate shareable benchmark JSON + Markdown snapshots
 - Local desktop/project office foundation:
   - `.parallel-agents/` workspace inside a project folder
   - `office init`, `office status`, and `office home` commands
@@ -114,7 +120,7 @@ parallel-agents gateway start --host 0.0.0.0 --port 8733
 - Desktop GUI is available but still maturing (single-user local workflow focus).
 - No hosted MCP endpoint or OAuth yet.
 - No distributed/remote worker execution beyond the current local in-process queue.
-- No hosted-grade OAuth/session model yet (local API key and JWT HS256 are available).
+- No hosted-grade OAuth/session model yet (local API key/JWT + gateway policy toggles are available).
 - No automated GitHub PR comments in this checkpoint.
 - Package publishing is still manual and should only happen after release checks pass.
 

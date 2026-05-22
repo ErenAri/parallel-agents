@@ -673,6 +673,69 @@ def render_evaluation_breakdown_report(breakdown: EvaluationBreakdown) -> str:
     return "\n".join(lines)
 
 
+def render_evaluation_public_report(
+    *,
+    label: str,
+    results: EvaluationResults,
+    score: EvaluationScore,
+    aggregate: EvaluationAggregate,
+    breakdown: EvaluationBreakdown,
+    comparison: EvaluationComparison | None = None,
+) -> str:
+    lines: list[str] = []
+    lines.append("# Public Benchmark Report")
+    lines.append("")
+    lines.append(f"- Generated at: {score.generated_at.isoformat()}")
+    lines.append(f"- Label: `{label}`")
+    lines.append(f"- Dataset: `{results.dataset_name}`")
+    lines.append(f"- Cases: {score.case_count}")
+    lines.append(f"- Completed: {score.completed_count}")
+    lines.append(f"- Failed: {score.failed_count}")
+    lines.append("")
+    lines.append("## KPI Snapshot")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|---|---:|")
+    lines.append(f"| Weighted Delivery Impact Score | {_fmt_pct(score.weighted_delivery_impact_score)} |")
+    lines.append(f"| Speed gain (median) | {_fmt_pct(score.speed_gain_median)} |")
+    lines.append(f"| Acceptance rate | {_fmt_pct(score.acceptance_rate)} |")
+    lines.append(f"| Regression rate | {_fmt_pct(score.regression_rate)} |")
+    lines.append(f"| Finding precision | {_fmt_pct(score.finding_precision)} |")
+    lines.append(f"| Total cost (USD) | ${aggregate.total_cost_usd:.4f} |")
+    lines.append(f"| Total duration (s) | {aggregate.total_duration_seconds:.1f} |")
+    lines.append("")
+
+    if comparison is not None:
+        lines.append("## Baseline Delta")
+        lines.append("")
+        lines.append("| Metric | Delta (Candidate - Baseline) |")
+        lines.append("|---|---:|")
+        lines.append(f"| Weighted Delivery Impact Score | {_fmt_pct(comparison.weighted_delivery_impact_delta)} |")
+        lines.append(f"| Speed gain (median) | {_fmt_pct(comparison.speed_gain_median_delta)} |")
+        lines.append(f"| Acceptance rate | {_fmt_pct(comparison.acceptance_rate_delta)} |")
+        lines.append(f"| Regression rate | {_fmt_pct(comparison.regression_rate_delta)} |")
+        lines.append(f"| Finding precision | {_fmt_pct(comparison.finding_precision_delta)} |")
+        lines.append(f"| Total cost (USD) | {comparison.total_cost_usd_delta:+.4f} |")
+        lines.append(f"| Total duration (s) | {comparison.total_duration_seconds_delta:+.1f} |")
+        lines.append("")
+
+    def _section(title: str, buckets: list[EvaluationBreakdownBucket]) -> None:
+        lines.append(f"## {title}")
+        lines.append("")
+        lines.append("| Key | Cases | Completed | Failed | Cost (USD) | Duration (s) |")
+        lines.append("|---|---:|---:|---:|---:|---:|")
+        for bucket in buckets:
+            lines.append(
+                f"| {bucket.key} | {bucket.case_count} | {bucket.completed_count} | "
+                f"{bucket.failed_count} | {bucket.total_cost_usd:.4f} | {bucket.total_duration_seconds:.1f} |"
+            )
+        lines.append("")
+
+    _section("Workflow Breakdown", breakdown.by_workflow)
+    _section("Project Breakdown", breakdown.by_project)
+    return "\n".join(lines)
+
+
 def _resolve_repo_path(case_repo_path: str | None, repo_root: Path | None) -> str | None:
     if case_repo_path:
         case_path = Path(case_repo_path)

@@ -70,6 +70,7 @@ mcp = FastMCP(
 )
 
 TOOL_CATALOG: list[dict[str, Any]] = [
+    {"name": "tool_discovery", "access": "read", "approval_required": False},
     {"name": "review", "access": "read", "approval_required": False},
     {"name": "security_scan", "access": "read", "approval_required": False},
     {"name": "test_analysis", "access": "read", "approval_required": False},

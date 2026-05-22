@@ -727,6 +727,96 @@ def test_eval_compare_command_json_output(tmp_path):
     assert payload["failed_count_delta"] == 0
 
 
+def test_eval_publish_writes_public_snapshot_and_report(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    candidate_path = tmp_path / "candidate.json"
+    output_json = tmp_path / "public.json"
+    output_report = tmp_path / "public.md"
+    started = datetime(2026, 5, 21, 10, 0, tzinfo=timezone.utc)
+    ended_short = datetime(2026, 5, 21, 10, 8, tzinfo=timezone.utc)
+    ended_long = datetime(2026, 5, 21, 10, 12, tzinfo=timezone.utc)
+
+    baseline = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(baseline_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="SEC-001",
+                task="task",
+                repo_path="/repo-a",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended_long,
+                duration_seconds=720,
+                status="success",
+                summary="ok",
+                total_cost_usd=0.25,
+                annotations=EvaluationAnnotations(
+                    accepted_without_major_edits=True,
+                    introduced_regression=False,
+                    findings_true_positives=2,
+                    findings_false_positives=1,
+                ),
+            )
+        ],
+    )
+    candidate = EvaluationResults(
+        dataset_name="bench",
+        dataset_path=str(candidate_path),
+        runs=[
+            EvaluationRunRecord(
+                case_id="SEC-001",
+                task="task",
+                repo_path="/repo-a",
+                baseline_human_minutes=60,
+                started_at=started,
+                completed_at=ended_short,
+                duration_seconds=480,
+                status="success",
+                summary="ok",
+                total_cost_usd=0.20,
+                annotations=EvaluationAnnotations(
+                    accepted_without_major_edits=True,
+                    introduced_regression=False,
+                    findings_true_positives=3,
+                    findings_false_positives=1,
+                ),
+            )
+        ],
+    )
+    baseline_path.write_text(baseline.model_dump_json(indent=2), encoding="utf-8")
+    candidate_path.write_text(candidate.model_dump_json(indent=2), encoding="utf-8")
+
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "eval",
+            "publish",
+            "--results",
+            str(candidate_path),
+            "--baseline-results",
+            str(baseline_path),
+            "--label",
+            "release-0.4.4-rc1",
+            "--output-json",
+            str(output_json),
+            "--output-report",
+            str(output_report),
+            "--json-output",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["label"] == "release-0.4.4-rc1"
+    assert "score" in payload
+    assert "aggregate" in payload
+    assert "comparison" in payload
+    assert output_json.exists()
+    assert output_report.exists()
+    assert "Public Benchmark Report" in output_report.read_text(encoding="utf-8")
+
+
 def test_eval_gate_command_fails_when_thresholds_not_met(tmp_path):
     results_path = tmp_path / "results.json"
     started = datetime(2026, 5, 21, 10, 0, tzinfo=timezone.utc)
@@ -1444,6 +1534,7 @@ def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
         jwt_secret,
         jwt_issuer,
         jwt_audience,
+        allow_remote_write_tools,
     ):
         captured["host"] = host
         captured["port"] = port
@@ -1452,6 +1543,7 @@ def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
         captured["jwt_secret"] = jwt_secret
         captured["jwt_issuer"] = jwt_issuer
         captured["jwt_audience"] = jwt_audience
+        captured["allow_remote_write_tools"] = allow_remote_write_tools
 
     import parallel_agents.gateway as gateway_module
 
@@ -1470,6 +1562,7 @@ def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
     assert captured["jwt_secret"] is None
     assert captured["jwt_issuer"] is None
     assert captured["jwt_audience"] is None
+    assert captured["allow_remote_write_tools"] is False
 
 
 def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
@@ -1484,6 +1577,7 @@ def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
         jwt_secret,
         jwt_issuer,
         jwt_audience,
+        allow_remote_write_tools,
     ):
         captured["host"] = host
         captured["port"] = port
@@ -1492,6 +1586,7 @@ def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
         captured["jwt_secret"] = jwt_secret
         captured["jwt_issuer"] = jwt_issuer
         captured["jwt_audience"] = jwt_audience
+        captured["allow_remote_write_tools"] = allow_remote_write_tools
 
     import parallel_agents.gateway as gateway_module
 
@@ -1508,6 +1603,7 @@ def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
     assert captured["output_dir"] == str(tmp_path)
     assert captured["api_key"] == "secret-token"
     assert captured["jwt_secret"] is None
+    assert captured["allow_remote_write_tools"] is False
 
 
 def test_gateway_start_passes_jwt_options(monkeypatch, tmp_path):
@@ -1522,6 +1618,7 @@ def test_gateway_start_passes_jwt_options(monkeypatch, tmp_path):
         jwt_secret,
         jwt_issuer,
         jwt_audience,
+        allow_remote_write_tools,
     ):
         captured["host"] = host
         captured["port"] = port
@@ -1530,6 +1627,7 @@ def test_gateway_start_passes_jwt_options(monkeypatch, tmp_path):
         captured["jwt_secret"] = jwt_secret
         captured["jwt_issuer"] = jwt_issuer
         captured["jwt_audience"] = jwt_audience
+        captured["allow_remote_write_tools"] = allow_remote_write_tools
 
     import parallel_agents.gateway as gateway_module
 
@@ -1555,6 +1653,49 @@ def test_gateway_start_passes_jwt_options(monkeypatch, tmp_path):
     assert captured["jwt_secret"] == "secret"
     assert captured["jwt_issuer"] == "issuer"
     assert captured["jwt_audience"] == "aud"
+    assert captured["allow_remote_write_tools"] is False
+
+
+def test_gateway_start_passes_remote_write_option(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def fake_run_gateway_server(
+        *,
+        host,
+        port,
+        output_dir,
+        api_key,
+        jwt_secret,
+        jwt_issuer,
+        jwt_audience,
+        allow_remote_write_tools,
+    ):
+        captured["host"] = host
+        captured["port"] = port
+        captured["output_dir"] = output_dir
+        captured["api_key"] = api_key
+        captured["jwt_secret"] = jwt_secret
+        captured["jwt_issuer"] = jwt_issuer
+        captured["jwt_audience"] = jwt_audience
+        captured["allow_remote_write_tools"] = allow_remote_write_tools
+
+    import parallel_agents.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "run_gateway_server", fake_run_gateway_server)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "gateway",
+            "start",
+            "--output-dir",
+            str(tmp_path),
+            "--allow-remote-write-tools",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["allow_remote_write_tools"] is True
 
 
 def test_office_init_creates_project_workspace(tmp_path):

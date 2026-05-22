@@ -91,6 +91,7 @@ parallel-agents eval sync-ci --results eval/results.json --outcomes eval/ci_outc
 parallel-agents eval score --results eval/results.json --output-report eval/report.md --output-json eval/score.json
 parallel-agents eval compare --baseline-results eval/baseline-results.json --candidate-results eval/results.json --output-report eval/compare.md --output-json eval/compare.json
 parallel-agents eval breakdown --results eval/results.json --output-report eval/breakdown.md --output-json eval/breakdown.json
+parallel-agents eval publish --results eval/results.json --baseline-results eval/baseline-results.json --label release-0.4.4-rc1 --output-json eval/public-benchmark.json --output-report eval/public-benchmark.md
 parallel-agents eval gate --results eval/results.json --min-weighted-impact 0.05 --max-regression-rate 0.10 --min-acceptance-rate 0.70
 
 # Build company workflow artifacts
@@ -139,6 +140,10 @@ parallel-agents gateway start --host 0.0.0.0 --port 8733
 
 # or explicit JWT flags via CLI
 parallel-agents gateway start --jwt-secret replace-with-shared-secret --jwt-issuer parallel-agents --jwt-audience parallel-agents-office
+
+# Optional remote MCP write enablement over gateway /mcp endpoints
+set PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS=1
+parallel-agents gateway start --allow-remote-write-tools
 ```
 
 ## CLI Commands
@@ -152,7 +157,7 @@ parallel-agents gateway start --jwt-secret replace-with-shared-secret --jwt-issu
 | `parallel-agents init` | Generate default configuration |
 | `parallel-agents company ...` | Generate company workflow artifacts (brief, stack, RFC, roadmap, issue plan, release checks) |
 | `parallel-agents office ...` | Create and inspect a local `.parallel-agents/` project workspace |
-| `parallel-agents eval run/annotate/sync-pr/sync-ci/score/compare/breakdown/gate` | Run, annotate, auto-sync PR acceptance and CI regressions, score, compare, break down cost/time, and quality-gate productivity/effectiveness benchmarks |
+| `parallel-agents eval run/annotate/sync-pr/sync-ci/score/compare/breakdown/publish/gate` | Run, annotate, auto-sync PR acceptance and CI regressions, score, compare, break down cost/time, publish benchmark snapshots, and quality-gate productivity/effectiveness benchmarks |
 | `parallel-agents gateway start` | Start the local project/run/job API |
 
 ## Local Project Office
@@ -211,6 +216,8 @@ The local gateway exposes a persistent API for projects, runs, jobs, artifacts, 
 - `POST /runs/company/plan`
 - `POST /runs/company/approve`
 - `POST /runs/company/apply`
+- `GET /mcp/tools`
+- `POST /mcp/tools/{tool_name}`
 - `GET /runs`
 - `GET /runs/{run_id}`
 - `POST /runs/{run_id}/cancel`
@@ -219,6 +226,7 @@ The local gateway exposes a persistent API for projects, runs, jobs, artifacts, 
 - `GET /runs/{run_id}/artifacts/{artifact_name}`
 - `GET /runs/{run_id}/artifacts`
 - `GET /runs/{run_id}/events`
+- `GET /audit/access`
 
 Run endpoints support:
 
@@ -239,6 +247,7 @@ Optional issuer/audience constraints:
 
 - `PA_GATEWAY_JWT_ISSUER` or `--jwt-issuer`
 - `PA_GATEWAY_JWT_AUDIENCE` or `--jwt-audience`
+- `PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS` or `--allow-remote-write-tools` to allow write-class MCP tools via gateway.
 
 `/health` remains readable without auth for liveness checks.
 

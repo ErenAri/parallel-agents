@@ -12,8 +12,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - `PA_GATEWAY_JWT_SECRET` / `--jwt-secret`
   - optional issuer check via `PA_GATEWAY_JWT_ISSUER` / `--jwt-issuer`
   - optional audience check via `PA_GATEWAY_JWT_AUDIENCE` / `--jwt-audience`
+- Gateway now exposes an MCP-over-HTTP surface and access audit trail:
+  - `GET /mcp/tools`
+  - `POST /mcp/tools/{tool_name}`
+  - `GET /audit/access`
+  - write-class MCP tools are policy-gated by `PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS` / `--allow-remote-write-tools`
 - MCP server now exposes `tool_discovery` for read/write capability discovery and approval-gate metadata.
 - Added expanded benchmark fixture: `examples/public_benchmark_v2.json`.
+- Added `parallel-agents eval publish` for shareable public benchmark JSON/Markdown snapshots.
 - Desktop office improvements:
   - project-home summary with recent project picker
   - runs page now executes real pipeline runs

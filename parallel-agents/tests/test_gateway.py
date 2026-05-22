@@ -351,3 +351,62 @@ def test_gateway_artifact_payload_endpoint(tmp_path):
     body = artifact.json()
     assert body["artifact_name"] == "roadmap"
     assert body["artifact"]["name"].endswith("Roadmap")
+
+
+def test_gateway_mcp_tools_read_and_write_policy(tmp_path):
+    app = create_gateway_app(tmp_path)
+    client = TestClient(app)
+
+    tools = client.get("/mcp/tools")
+    assert tools.status_code == 200
+    tools_payload = tools.json()
+    assert tools_payload["count"] >= 1
+    assert tools_payload["allow_remote_write_tools"] is False
+
+    read_call = client.post(
+        "/mcp/tools/company_idea",
+        json={"idea": "Build gateway hosted MCP surface"},
+    )
+    assert read_call.status_code == 200
+    read_payload = read_call.json()
+    assert read_payload["access"] == "read"
+    assert "Build Gateway Hosted Mcp Surface" in json.dumps(read_payload["response"])
+
+    roadmap = build_roadmap(create_product_brief("Build hosted MCP plan")).model_dump(mode="json")
+    blocked_write = client.post(
+        "/mcp/tools/company_plan",
+        json={
+            "roadmap_json": json.dumps(roadmap),
+            "repo": "owner/repo",
+            "run_id": "run-mcp-write",
+        },
+    )
+    assert blocked_write.status_code == 403
+
+
+def test_gateway_mcp_tools_write_enabled_and_access_audit(tmp_path):
+    app = create_gateway_app(tmp_path, allow_remote_write_tools=True)
+    client = TestClient(app)
+
+    roadmap = build_roadmap(create_product_brief("Build hosted MCP plan")).model_dump(mode="json")
+    plan = client.post(
+        "/mcp/tools/company_plan",
+        json={
+            "roadmap_json": json.dumps(roadmap),
+            "repo": "owner/repo",
+            "run_id": "run-mcp-write-enabled",
+        },
+    )
+    assert plan.status_code == 200
+    plan_payload = plan.json()
+    assert plan_payload["access"] == "write"
+    assert plan_payload["approval_required"] is True
+    assert plan_payload["response"]["approval_status"] == "pending"
+
+    client.post("/projects", json={"name": "Audit Demo"})
+    audit = client.get("/audit/access")
+    assert audit.status_code == 200
+    audit_payload = audit.json()
+    assert audit_payload["count"] >= 1
+    paths = {entry["path"] for entry in audit_payload["events"]}
+    assert "/mcp/tools/company_plan" in paths or "/projects" in paths

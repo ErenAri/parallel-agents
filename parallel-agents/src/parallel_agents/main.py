@@ -28,6 +28,7 @@ from parallel_agents.eval_harness import (
     load_evaluation_results,
     render_evaluation_breakdown_report,
     render_evaluation_comparison_report,
+    render_evaluation_public_report,
     render_evaluation_report,
     run_evaluation,
     save_evaluation_comparison,
@@ -1032,6 +1033,114 @@ def eval_breakdown(
         console.print(f"[green]Breakdown report written to {output_report}[/green]")
     if output_json:
         console.print(f"[green]Breakdown JSON written to {output_json}[/green]")
+
+
+@eval_group.command(name="publish")
+@click.option(
+    "--results",
+    "results_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to evaluation results JSON.",
+)
+@click.option(
+    "--baseline-results",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Optional baseline results JSON to include candidate-vs-baseline deltas.",
+)
+@click.option(
+    "--label",
+    default="candidate",
+    show_default=True,
+    help="Public label for this benchmark snapshot (e.g., candidate, release-0.4.4).",
+)
+@click.option(
+    "--output-json",
+    default=Path("eval/public-benchmark.json"),
+    type=click.Path(path_type=Path),
+    show_default=True,
+    help="Output path for public benchmark JSON snapshot.",
+)
+@click.option(
+    "--output-report",
+    default=Path("eval/public-benchmark.md"),
+    type=click.Path(path_type=Path),
+    show_default=True,
+    help="Output path for public benchmark Markdown report.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print published payload as JSON.")
+def eval_publish(
+    results_path: Path,
+    baseline_results: Path | None,
+    label: str,
+    output_json: Path,
+    output_report: Path,
+    json_output: bool,
+) -> None:
+    """Publish a shareable benchmark snapshot from evaluation artifacts."""
+    results = load_evaluation_results(results_path)
+    score = compute_evaluation_score(results)
+    aggregate = summarize_evaluation_results(results)
+    breakdown = compute_evaluation_breakdown(results)
+
+    comparison = None
+    if baseline_results:
+        baseline = load_evaluation_results(baseline_results)
+        comparison = compare_evaluation_results(
+            baseline,
+            results,
+            baseline_results_path=str(baseline_results),
+            candidate_results_path=str(results_path),
+        )
+
+    payload: dict[str, Any] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "label": label,
+        "results_path": str(results_path),
+        "baseline_results_path": str(baseline_results) if baseline_results else None,
+        "dataset_name": results.dataset_name,
+        "dataset_path": results.dataset_path,
+        "score": score.model_dump(mode="json"),
+        "aggregate": aggregate.model_dump(mode="json"),
+        "breakdown": breakdown.model_dump(mode="json"),
+    }
+    if comparison is not None:
+        payload["comparison"] = comparison.model_dump(mode="json")
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    report = render_evaluation_public_report(
+        label=label,
+        results=results,
+        score=score,
+        aggregate=aggregate,
+        breakdown=breakdown,
+        comparison=comparison,
+    )
+    output_report.parent.mkdir(parents=True, exist_ok=True)
+    output_report.write_text(report, encoding="utf-8")
+
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    table = Table(title="Evaluation Publish")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Label", label)
+    table.add_row("Cases", str(score.case_count))
+    table.add_row("Weighted Delivery Impact", _fmt_percent(score.weighted_delivery_impact_score))
+    table.add_row("Speed Gain (median)", _fmt_percent(score.speed_gain_median))
+    table.add_row("Acceptance Rate", _fmt_percent(score.acceptance_rate))
+    table.add_row("Regression Rate", _fmt_percent(score.regression_rate))
+    table.add_row("Finding Precision", _fmt_percent(score.finding_precision))
+    table.add_row("Total Cost (USD)", f"{aggregate.total_cost_usd:.4f}")
+    table.add_row("Total Duration (s)", f"{aggregate.total_duration_seconds:.1f}")
+    console.print(table)
+    console.print(f"[green]Public benchmark JSON written to {output_json}[/green]")
+    console.print(f"[green]Public benchmark report written to {output_report}[/green]")
 
 
 @eval_group.command(name="gate")
@@ -2321,6 +2430,12 @@ def gateway_group() -> None:
     default=None,
     help="Optional JWT audience constraint (or PA_GATEWAY_JWT_AUDIENCE).",
 )
+@click.option(
+    "--allow-remote-write-tools/--no-allow-remote-write-tools",
+    default=False,
+    show_default=True,
+    help="Allow write-class MCP tools over gateway /mcp endpoints.",
+)
 def gateway_start(
     host: str,
     port: int,
@@ -2329,6 +2444,7 @@ def gateway_start(
     jwt_secret: str | None,
     jwt_issuer: str | None,
     jwt_audience: str | None,
+    allow_remote_write_tools: bool,
 ) -> None:
     """Start the local gateway HTTP server."""
     try:
@@ -2346,6 +2462,7 @@ def gateway_start(
             jwt_secret=jwt_secret,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
+            allow_remote_write_tools=allow_remote_write_tools,
         )
     except Exception as exc:
         click.echo(f"Failed to start gateway: {exc}", err=True)
