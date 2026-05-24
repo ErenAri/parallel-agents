@@ -75,13 +75,23 @@ from parallel_agents.project_office import (
     list_office_run_ids,
     office_output_dir,
 )
+from parallel_agents.workspace_memory import (
+    add_memory_entry,
+    list_memory_entries,
+    load_memory_policies,
+    save_memory_policies,
+    search_memory_entries,
+)
 from parallel_agents.tools.github_apply import (
     execute_company_issue_plan as _execute_company_issue_plan,
     issue_field as _issue_field,
 )
 from parallel_agents.tools.github_tools import (
+    create_pr,
     fetch_pull_request,
+    parse_pr_url,
     parse_repo_ref,
+    post_pr_comment,
 )
 
 console = Console()
@@ -1772,29 +1782,386 @@ def company_pr_summary(
 ) -> None:
     """Generate a PR summary from a stored run final output."""
     try:
-        final_output = _load_run_final_output_payload(output_dir, run_id)
-        artifacts = list_company_artifact_paths(output_dir, run_id)
-        summary = render_pr_summary(final_output, run_id=run_id, artifacts=artifacts)
+        summary_artifact, artifacts = _build_and_persist_pr_summary(
+            output_dir=output_dir,
+            run_id=run_id,
+            output=output,
+        )
     except Exception as exc:
         click.echo(f"Failed to build PR summary: {exc}", err=True)
         sys.exit(EXIT_RUNTIME_FAILURE)
 
-    if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(summary, encoding="utf-8")
-
     payload = {
         "run_id": run_id,
-        "summary": summary,
-        "output": str(output.resolve()) if output else None,
+        "summary": str(summary_artifact.get("summary", "")),
+        "output": str(summary_artifact.get("summary_path", "")),
         "artifacts": artifacts,
     }
     if json_output:
         click.echo(json.dumps(payload, indent=2, default=str))
         return
-    click.echo(summary)
-    if output:
-        console.print(f"[green]PR summary written to {output}[/green]")
+    click.echo(payload["summary"])
+    console.print(f"[green]PR summary written to {payload['output']}[/green]")
+
+
+@company_group.command(name="pr-link")
+@click.option("--run-id", required=True, help="Run ID to link with a pull request.")
+@click.option(
+    "--pr-url",
+    required=True,
+    help="GitHub pull request URL, e.g. https://github.com/owner/repo/pull/123",
+)
+@click.option(
+    "--artifact",
+    "artifact_name",
+    default="issue-plan",
+    show_default=True,
+    help="Artifact to enrich with PR link metadata.",
+)
+@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
+def company_pr_link(
+    run_id: str,
+    pr_url: str,
+    artifact_name: str,
+    output_dir: str,
+    json_output: bool,
+) -> None:
+    """Link a run to a GitHub PR URL and persist an immutable audit event."""
+    linked_by = (
+        os.environ.get("USERNAME")
+        or os.environ.get("USER")
+        or "manual-link"
+    )
+    linked_at = datetime.now(timezone.utc).isoformat()
+    try:
+        link_payload = _persist_run_pr_link(
+            output_dir=output_dir,
+            run_id=run_id,
+            artifact_name=artifact_name,
+            pr_url=pr_url,
+            linked_by=linked_by,
+            linked_at=linked_at,
+        )
+    except Exception as exc:
+        click.echo(f"Failed to link PR: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if json_output:
+        click.echo(json.dumps(link_payload, indent=2, default=str))
+        return
+
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"Run ID: {run_id}",
+                    f"PR: {pr_url}",
+                    f"Repo: {link_payload['repo']}",
+                    f"Artifact updated: {'yes' if link_payload['linked_artifact_found'] else 'no'} ({artifact_name})",
+                    f"Audit: {link_payload['audit_log_path']}",
+                ]
+            ),
+            title="PR Linked",
+            border_style="green",
+        )
+    )
+
+
+@company_group.command(name="pr-create")
+@click.option("--run-id", required=True, help="Run ID containing workflow artifacts.")
+@click.option(
+    "--repo",
+    "repo_ref",
+    default=None,
+    help="Target GitHub repository (owner/repo or URL). If omitted, derive from issue-plan artifact.",
+)
+@click.option("--head", required=True, help="Head branch for the PR (already pushed).")
+@click.option("--base", default="main", show_default=True, help="Base branch.")
+@click.option("--title", default=None, help="Optional PR title.")
+@click.option("--artifact", "artifact_name", default="issue-plan", show_default=True, help="Artifact to enrich with PR link metadata.")
+@click.option("--draft/--no-draft", default=True, show_default=True, help="Create draft PR.")
+@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
+def company_pr_create(
+    run_id: str,
+    repo_ref: str | None,
+    head: str,
+    base: str,
+    title: str | None,
+    artifact_name: str,
+    draft: bool,
+    output_dir: str,
+    json_output: bool,
+) -> None:
+    """Create a GitHub PR and persist run-linked PR artifacts."""
+    issue_plan = load_company_artifact(output_dir, run_id, artifact_name)
+    resolved_repo_ref = str(repo_ref or "").strip() or str((issue_plan or {}).get("repo") or "").strip()
+    parsed_repo = parse_repo_ref(resolved_repo_ref)
+    if not parsed_repo:
+        click.echo(
+            "Failed to resolve repository. Pass --repo or ensure issue-plan contains a valid repo.",
+            err=True,
+        )
+        sys.exit(EXIT_RUNTIME_FAILURE)
+    owner, repo = parsed_repo
+    canonical_repo = f"{owner}/{repo}"
+
+    if issue_plan:
+        artifact_repo = str(issue_plan.get("repo") or "").strip()
+        if artifact_repo and artifact_repo != canonical_repo:
+            click.echo(
+                f"Repo mismatch: artifact repo is '{artifact_repo}' but requested repo is '{canonical_repo}'.",
+                err=True,
+            )
+            sys.exit(EXIT_RUNTIME_FAILURE)
+
+    clean_head = str(head).strip()
+    clean_base = str(base).strip() or "main"
+    if not clean_head:
+        click.echo("--head is required.", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    resolved_title = str(title).strip() if title else ""
+    if not resolved_title:
+        resolved_title = f"Parallel Agents: {run_id}"
+
+    try:
+        summary_artifact, artifacts = _build_and_persist_pr_summary(
+            output_dir=output_dir,
+            run_id=run_id,
+            output=None,
+        )
+        body = str(summary_artifact.get("summary", ""))
+        pr_url = asyncio.run(
+            create_pr(
+                owner,
+                repo,
+                resolved_title,
+                body,
+                head=clean_head,
+                base=clean_base,
+                draft=draft,
+            )
+        )
+    except Exception as exc:
+        click.echo(f"Failed to create PR: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if not pr_url:
+        click.echo(
+            "PR creation returned no URL. Verify `gh auth status`, repo access, and pushed branch.",
+            err=True,
+        )
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "run_id": run_id,
+        "repo": canonical_repo,
+        "url": pr_url,
+        "title": resolved_title,
+        "head": clean_head,
+        "base": clean_base,
+        "draft": draft,
+        "summary_path": str(summary_artifact.get("summary_path", "")),
+        "created_at": created_at,
+        "artifacts": artifacts,
+    }
+    pr_create_path = persist_company_artifact(
+        output_dir=output_dir,
+        run_id=run_id,
+        artifact_name="pr-create",
+        artifact_payload=payload,
+    )
+    pr_create_audit = append_company_artifact_event(
+        output_dir=output_dir,
+        run_id=run_id,
+        artifact_name="pr-create",
+        event_payload={
+            "event": "pr_created",
+            "run_id": run_id,
+            "repo": canonical_repo,
+            "url": pr_url,
+            "title": resolved_title,
+            "head": clean_head,
+            "base": clean_base,
+            "draft": draft,
+            "created_at": created_at,
+        },
+    )
+    try:
+        link_payload = _persist_run_pr_link(
+            output_dir=output_dir,
+            run_id=run_id,
+            artifact_name=artifact_name,
+            pr_url=pr_url,
+            linked_by=(
+                os.environ.get("USERNAME")
+                or os.environ.get("USER")
+                or "company-pr-create"
+            ),
+            linked_at=created_at,
+        )
+    except Exception as exc:
+        click.echo(f"PR created but failed to persist run link: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    payload["artifact_path"] = str(pr_create_path.resolve())
+    payload["audit_log_path"] = str(pr_create_audit.resolve())
+    payload["pr_link"] = link_payload
+
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"Run ID: {run_id}",
+                    f"Repo: {canonical_repo}",
+                    f"URL: {pr_url}",
+                    f"Head -> Base: {clean_head} -> {clean_base}",
+                    f"Draft: {'yes' if draft else 'no'}",
+                ]
+            ),
+            title="PR Created",
+            border_style="green",
+        )
+    )
+
+
+@company_group.command(name="pr-comment")
+@click.option("--run-id", required=True, help="Run ID containing summary/risk outputs.")
+@click.option(
+    "--pr-url",
+    required=True,
+    help="GitHub pull request URL, e.g. https://github.com/owner/repo/pull/123",
+)
+@click.option(
+    "--mode",
+    type=click.Choice(["summary", "risk", "both"]),
+    default="both",
+    show_default=True,
+    help="Which comment payloads to post.",
+)
+@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
+def company_pr_comment(
+    run_id: str,
+    pr_url: str,
+    mode: str,
+    output_dir: str,
+    json_output: bool,
+) -> None:
+    """Post run-linked summary/risk comments to an existing GitHub PR."""
+    parsed_pr = parse_pr_url(pr_url)
+    if not parsed_pr:
+        click.echo("Failed to parse --pr-url. Use a GitHub PR URL.", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+    owner, repo, pr_number = parsed_pr
+    repo_ref = f"{owner}/{repo}"
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    comments: list[dict[str, Any]] = []
+    try:
+        if mode in {"summary", "both"}:
+            summary_artifact, _ = _build_and_persist_pr_summary(
+                output_dir=output_dir,
+                run_id=run_id,
+                output=None,
+            )
+            summary_body = (
+                "### Parallel Agents Summary\n\n"
+                f"{summary_artifact.get('summary', '').strip()}\n"
+            )
+            summary_ok = asyncio.run(post_pr_comment(owner, repo, pr_number, summary_body))
+            comments.append(
+                {
+                    "type": "summary",
+                    "posted": bool(summary_ok),
+                    "body": summary_body,
+                }
+            )
+
+        if mode in {"risk", "both"}:
+            final_output = _load_run_final_output_payload(output_dir, run_id)
+            risk_body = _build_risk_comment_markdown(run_id=run_id, final_output=final_output)
+            risk_ok = asyncio.run(post_pr_comment(owner, repo, pr_number, risk_body))
+            comments.append(
+                {
+                    "type": "risk",
+                    "posted": bool(risk_ok),
+                    "body": risk_body,
+                }
+            )
+    except Exception as exc:
+        click.echo(f"Failed to post PR comments: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    posted_count = sum(1 for item in comments if item.get("posted"))
+    posted_all = posted_count == len(comments)
+    payload = {
+        "run_id": run_id,
+        "pr_url": pr_url,
+        "repo": repo_ref,
+        "number": pr_number,
+        "mode": mode,
+        "posted_count": posted_count,
+        "attempted_count": len(comments),
+        "posted_all": posted_all,
+        "comments": comments,
+        "created_at": created_at,
+    }
+    artifact_path = persist_company_artifact(
+        output_dir=output_dir,
+        run_id=run_id,
+        artifact_name="pr-comment",
+        artifact_payload=payload,
+    )
+    audit_path = append_company_artifact_event(
+        output_dir=output_dir,
+        run_id=run_id,
+        artifact_name="pr-comment",
+        event_payload={
+            "event": "pr_comments_posted",
+            "run_id": run_id,
+            "repo": repo_ref,
+            "pr_url": pr_url,
+            "number": pr_number,
+            "mode": mode,
+            "posted_count": posted_count,
+            "attempted_count": len(comments),
+            "posted_all": posted_all,
+            "created_at": created_at,
+        },
+    )
+    payload["artifact_path"] = str(artifact_path.resolve())
+    payload["audit_log_path"] = str(audit_path.resolve())
+
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        console.print(
+            Panel(
+                "\n".join(
+                    [
+                        f"Run ID: {run_id}",
+                        f"PR: {pr_url}",
+                        f"Mode: {mode}",
+                        f"Posted: {posted_count}/{len(comments)}",
+                        f"Audit: {audit_path}",
+                    ]
+                ),
+                title="PR Comments",
+                border_style="green" if posted_all else "yellow",
+            )
+        )
+
+    if not posted_all:
+        click.echo("One or more PR comments failed to post.", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
 
 
 @company_group.command(name="plan")
@@ -2249,6 +2616,13 @@ def office_home(project_path: Path, json_output: bool) -> None:
     """Show project-office home summary including recent run artifacts."""
     status, output_root = _resolve_initialized_office(project_path)
     run_ids = list_office_run_ids(project_path)
+    decision_entries = list_memory_entries(output_root, kind="decision", limit=10_000)
+    lesson_entries = list_memory_entries(output_root, kind="lesson", limit=10_000)
+    all_memory_entries = sorted(
+        [*decision_entries, *lesson_entries],
+        key=lambda item: str(item.get("created_at", "")),
+        reverse=True,
+    )
 
     run_summaries: list[dict[str, Any]] = []
     total_artifact_count = 0
@@ -2271,6 +2645,20 @@ def office_home(project_path: Path, json_output: bool) -> None:
         "run_count": len(run_ids),
         "artifact_count": total_artifact_count,
         "recent_runs": run_summaries[:5],
+        "memory_count": len(all_memory_entries),
+        "memory_counts": {
+            "decision": len(decision_entries),
+            "lesson": len(lesson_entries),
+        },
+        "recent_memory": [
+            {
+                "id": entry.get("id"),
+                "kind": entry.get("kind"),
+                "title": entry.get("title"),
+                "created_at": entry.get("created_at"),
+            }
+            for entry in all_memory_entries[:5]
+        ],
         "directory_exists": status.get("directory_exists", {}),
         "gateway_db_exists": status["gateway_db_exists"],
     }
@@ -2288,6 +2676,7 @@ def office_home(project_path: Path, json_output: bool) -> None:
                     f"Office: {payload['office_dir']}",
                     f"Runs with artifacts: {payload['run_count']}",
                     f"Total artifacts: {payload['artifact_count']}",
+                    f"Memory entries: {payload['memory_count']}",
                     f"Gateway DB: {'present' if payload['gateway_db_exists'] else 'missing'}",
                 ]
             ),
@@ -2307,6 +2696,21 @@ def office_home(project_path: Path, json_output: bool) -> None:
     else:
         recent_table.add_row("-", "0", "No run-linked artifacts found")
     console.print(recent_table)
+
+    memory_table = Table(title="Recent Memory")
+    memory_table.add_column("Kind")
+    memory_table.add_column("Title")
+    memory_table.add_column("Created")
+    if payload["recent_memory"]:
+        for item in payload["recent_memory"]:
+            memory_table.add_row(
+                str(item.get("kind") or "-"),
+                str(item.get("title") or "-"),
+                str(item.get("created_at") or "-"),
+            )
+    else:
+        memory_table.add_row("-", "No memory entries found", "-")
+    console.print(memory_table)
 
 
 @office_group.command(name="artifacts")
@@ -2398,6 +2802,245 @@ def office_artifacts(
     else:
         table.add_row("-", "0", "No run-linked artifacts found")
     console.print(table)
+
+
+@office_group.group(name="memory")
+def office_memory_group() -> None:
+    """Manage local workspace memory entries and policies."""
+    pass
+
+
+@office_memory_group.command(name="add")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to update.",
+)
+@click.option("--kind", type=click.Choice(["decision", "lesson"]), required=True, help="Memory entry kind.")
+@click.option("--title", required=True, help="Short title for the memory entry.")
+@click.option("--content", required=True, help="Detailed memory content.")
+@click.option("--tags", default="", help="Comma-separated tags.")
+@click.option("--owner-role", default=None, help="Optional owner role.")
+@click.option("--source", default=None, help="Optional source reference.")
+@click.option("--run-id", default=None, help="Optional linked run id.")
+@click.option("--json-output/--no-json-output", default=False, help="Print memory entry as JSON.")
+def office_memory_add(
+    project_path: Path,
+    kind: str,
+    title: str,
+    content: str,
+    tags: str,
+    owner_role: str | None,
+    source: str | None,
+    run_id: str | None,
+    json_output: bool,
+) -> None:
+    """Append a memory entry to local workspace memory."""
+    _, output_root = _resolve_initialized_office(project_path)
+    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+    try:
+        entry = add_memory_entry(
+            output_root,
+            kind=kind,
+            title=title,
+            content=content,
+            tags=tag_list,
+            owner_role=owner_role,
+            source=source,
+            run_id=run_id,
+        )
+    except Exception as exc:
+        click.echo(f"Failed to add memory entry: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if json_output:
+        click.echo(json.dumps(entry, indent=2, default=str))
+        return
+
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"ID: {entry['id']}",
+                    f"Kind: {entry['kind']}",
+                    f"Title: {entry['title']}",
+                    f"Tags: {', '.join(entry.get('tags') or []) or '-'}",
+                ]
+            ),
+            title="Memory Entry Added",
+            border_style="green",
+        )
+    )
+
+
+@office_memory_group.command(name="list")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option("--kind", type=click.Choice(["decision", "lesson"]), default=None, help="Optional memory kind filter.")
+@click.option("--limit", default=50, type=int, show_default=True, help="Maximum entries to return.")
+@click.option("--json-output/--no-json-output", default=False, help="Print memory entries as JSON.")
+def office_memory_list(
+    project_path: Path,
+    kind: str | None,
+    limit: int,
+    json_output: bool,
+) -> None:
+    """List local workspace memory entries."""
+    _, output_root = _resolve_initialized_office(project_path)
+    try:
+        entries = list_memory_entries(output_root, kind=kind, limit=limit)
+    except Exception as exc:
+        click.echo(f"Failed to list memory entries: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    payload = {
+        "project_root": str(project_path.resolve()),
+        "output_dir": output_root,
+        "kind": kind,
+        "count": len(entries),
+        "entries": entries,
+    }
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    table = Table(title="Office Memory")
+    table.add_column("ID")
+    table.add_column("Kind")
+    table.add_column("Created")
+    table.add_column("Title")
+    table.add_column("Tags")
+    for entry in entries:
+        table.add_row(
+            str(entry.get("id", "-")),
+            str(entry.get("kind", "-")),
+            str(entry.get("created_at", "-")),
+            str(entry.get("title", "-")),
+            ", ".join(str(tag) for tag in (entry.get("tags") or [])) or "-",
+        )
+    if not entries:
+        table.add_row("-", "-", "-", "No memory entries found", "-")
+    console.print(table)
+
+
+@office_memory_group.command(name="search")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option("--query", required=True, help="Query text to search in title/content/tags.")
+@click.option("--kind", type=click.Choice(["decision", "lesson"]), default=None, help="Optional memory kind filter.")
+@click.option("--limit", default=20, type=int, show_default=True, help="Maximum matches to return.")
+@click.option("--json-output/--no-json-output", default=False, help="Print memory matches as JSON.")
+def office_memory_search(
+    project_path: Path,
+    query: str,
+    kind: str | None,
+    limit: int,
+    json_output: bool,
+) -> None:
+    """Search local workspace memory entries."""
+    _, output_root = _resolve_initialized_office(project_path)
+    try:
+        matches = search_memory_entries(output_root, query=query, kind=kind, limit=limit)
+    except Exception as exc:
+        click.echo(f"Failed to search memory entries: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    payload = {
+        "project_root": str(project_path.resolve()),
+        "output_dir": output_root,
+        "query": query,
+        "kind": kind,
+        "count": len(matches),
+        "entries": matches,
+    }
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    table = Table(title=f"Office Memory Search ({query})")
+    table.add_column("ID")
+    table.add_column("Kind")
+    table.add_column("Title")
+    table.add_column("Owner")
+    for entry in matches:
+        table.add_row(
+            str(entry.get("id", "-")),
+            str(entry.get("kind", "-")),
+            str(entry.get("title", "-")),
+            str(entry.get("owner_role") or "-"),
+        )
+    if not matches:
+        table.add_row("-", "-", "No matches found", "-")
+    console.print(table)
+
+
+@office_memory_group.command(name="policies")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option(
+    "--set-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Optional policy JSON file to persist.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print policies as JSON.")
+def office_memory_policies(
+    project_path: Path,
+    set_file: Path | None,
+    json_output: bool,
+) -> None:
+    """Get or update workspace memory policies."""
+    _, output_root = _resolve_initialized_office(project_path)
+    try:
+        if set_file:
+            raw_payload = json.loads(set_file.read_text(encoding="utf-8"))
+            if not isinstance(raw_payload, dict):
+                raise ValueError("policy file must contain a JSON object")
+            payload = save_memory_policies(output_root, raw_payload)
+        else:
+            payload = load_memory_policies(output_root)
+    except Exception as exc:
+        click.echo(f"Failed to load/update memory policies: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"Schema: {payload.get('schema_version', '-')}",
+                    f"Updated: {payload.get('updated_at', '-')}",
+                    f"Rules: {len(payload.get('rules', [])) if isinstance(payload.get('rules'), list) else 0}",
+                ]
+            ),
+            title="Memory Policies",
+            border_style="blue",
+        )
+    )
 
 
 @cli.group(name="gateway")
@@ -2836,6 +3479,169 @@ def _load_run_final_output_payload(output_dir: str, run_id: str) -> dict[str, An
         return artifact
 
     raise ValueError(f"No final output found for run {run_id}.")
+
+
+def _build_and_persist_pr_summary(
+    *,
+    output_dir: str,
+    run_id: str,
+    output: Path | None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    final_output = _load_run_final_output_payload(output_dir, run_id)
+    artifacts = list_company_artifact_paths(output_dir, run_id)
+    summary = render_pr_summary(final_output, run_id=run_id, artifacts=artifacts)
+
+    if output:
+        summary_path = output.resolve()
+    else:
+        summary_path = (Path(output_dir) / run_id / "company" / "pr-summary.md").resolve()
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(summary, encoding="utf-8")
+
+    summary_artifact = {
+        "run_id": run_id,
+        "summary": summary,
+        "summary_path": str(summary_path),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "artifacts": artifacts,
+    }
+    persist_company_artifact(
+        output_dir=output_dir,
+        run_id=run_id,
+        artifact_name="pr-summary",
+        artifact_payload=summary_artifact,
+    )
+    refreshed_artifacts = list_company_artifact_paths(output_dir, run_id)
+    return summary_artifact, refreshed_artifacts
+
+
+def _build_risk_comment_markdown(
+    *,
+    run_id: str,
+    final_output: dict[str, Any],
+) -> str:
+    risk_report = final_output.get("risk_report")
+    findings = risk_report if isinstance(risk_report, list) else []
+    if not findings:
+        return (
+            "### Parallel Agents Risk Report\n\n"
+            f"Run: `{run_id}`\n\n"
+            "No risk findings were reported."
+        )
+
+    severity_counts: dict[str, int] = {}
+    for finding in findings:
+        if isinstance(finding, dict):
+            severity = str(finding.get("severity", "unknown")).lower()
+        else:
+            severity = "unknown"
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+
+    ordered_severities = ["critical", "high", "medium", "low", "info", "unknown"]
+    summary = ", ".join(
+        f"{key}:{severity_counts[key]}"
+        for key in ordered_severities
+        if key in severity_counts
+    )
+    lines = [
+        "### Parallel Agents Risk Report",
+        "",
+        f"Run: `{run_id}`",
+        "",
+        f"Severity totals: {summary}",
+        "",
+        "Top findings:",
+    ]
+    for finding in findings[:10]:
+        if not isinstance(finding, dict):
+            continue
+        severity = str(finding.get("severity", "unknown")).upper()
+        title = str(finding.get("title", "Untitled finding"))
+        file_path = str(finding.get("file_path") or "-")
+        lines.append(f"- [{severity}] {title} ({file_path})")
+    return "\n".join(lines)
+
+
+def _persist_run_pr_link(
+    *,
+    output_dir: str,
+    run_id: str,
+    artifact_name: str,
+    pr_url: str,
+    linked_by: str,
+    linked_at: str,
+) -> dict[str, Any]:
+    parsed_pr = parse_pr_url(pr_url)
+    if not parsed_pr:
+        raise ValueError("Failed to parse --pr-url. Use a GitHub PR URL.")
+    pr_owner, pr_repo, pr_number = parsed_pr
+    pr_repo_ref = f"{pr_owner}/{pr_repo}"
+
+    issue_plan = load_company_artifact(output_dir, run_id, artifact_name)
+    if issue_plan:
+        artifact_repo = str(issue_plan.get("repo") or "").strip()
+        if artifact_repo and artifact_repo != pr_repo_ref:
+            raise ValueError(
+                f"PR repo mismatch: artifact repo is '{artifact_repo}' but PR repo is '{pr_repo_ref}'."
+            )
+
+        links = issue_plan.get("pr_links")
+        if not isinstance(links, list):
+            links = []
+        links = [entry for entry in links if isinstance(entry, dict)]
+        if not any(str(entry.get("pr_url", "")).strip() == pr_url for entry in links):
+            links.append(
+                {
+                    "pr_url": pr_url,
+                    "repo": pr_repo_ref,
+                    "number": pr_number,
+                    "linked_at": linked_at,
+                    "linked_by": linked_by,
+                }
+            )
+        issue_plan["pr_links"] = links
+        issue_plan["latest_pr_url"] = pr_url
+        persist_company_artifact(
+            output_dir=output_dir,
+            run_id=run_id,
+            artifact_name=artifact_name,
+            artifact_payload=issue_plan,
+        )
+
+    link_payload = {
+        "run_id": run_id,
+        "artifact": artifact_name,
+        "pr_url": pr_url,
+        "repo": pr_repo_ref,
+        "number": pr_number,
+        "linked_at": linked_at,
+        "linked_by": linked_by,
+        "linked_artifact_found": bool(issue_plan),
+    }
+    link_path = persist_company_artifact(
+        output_dir=output_dir,
+        run_id=run_id,
+        artifact_name="pr-link",
+        artifact_payload=link_payload,
+    )
+    audit_path = append_company_artifact_event(
+        output_dir=output_dir,
+        run_id=run_id,
+        artifact_name="pr-link",
+        event_payload={
+            "event": "pr_linked",
+            "run_id": run_id,
+            "artifact": artifact_name,
+            "repo": pr_repo_ref,
+            "pr_url": pr_url,
+            "number": pr_number,
+            "linked_by": linked_by,
+            "linked_at": linked_at,
+        },
+    )
+    link_payload["artifact_path"] = str(link_path.resolve())
+    link_payload["audit_log_path"] = str(audit_path.resolve())
+    return link_payload
 
 
 def _emit_artifact(

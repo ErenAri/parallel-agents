@@ -61,12 +61,12 @@ Completed:
 - GitHub labels/milestones/branch templates.
 - Stable branch name generation.
 - PR summary generation from stored run outputs.
+- Draft PR creation from run-linked summaries (`company pr-create`).
+- PR summary/risk GitHub comment posting (`company pr-comment`).
+- Run-to-PR linking artifacts and immutable PR-link audit events.
 
 Remaining:
 
-- Draft PR creation.
-- PR summary and risk report comments on GitHub.
-- Stronger run-to-issue and run-to-PR linking.
 - GitHub label/milestone synchronization commands.
 
 ## Phase 3: Gateway and Job System
@@ -107,6 +107,10 @@ Completed:
 - Desktop project-home summary and recent project picker.
 - Desktop approvals queue filters with approved issue-plan apply action.
 - Desktop GitHub PR creation with run-linked PR summary artifact.
+- Workspace knowledge layer v1:
+  - `office memory add/list/search/policies`
+  - persisted memory files under `.parallel-agents/memory/`
+  - gateway memory APIs for entry/policy access
 - Desktop Runs page now executes real pipeline runs with live activity streaming and worker status updates.
 - Desktop project-home release/productivity card from eval artifacts (impact, acceptance, regression, gate, cost, duration).
 - Desktop metric-history timeline with latest-vs-previous deltas from evaluation score artifacts.

@@ -65,6 +65,14 @@ When API key protection is enabled, all endpoints except `GET /health` require o
 - `GET /projects`
 - `GET /projects/{project_id}`
 
+### Workspace Memory
+
+- `POST /memory/entries`
+- `GET /memory/entries`
+- `GET /memory/search`
+- `GET /memory/policies`
+- `PUT /memory/policies`
+
 ### Company Workflows
 
 - `POST /runs/company/idea`

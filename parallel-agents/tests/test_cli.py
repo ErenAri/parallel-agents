@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from click.testing import CliRunner
 
 import parallel_agents.main as main_module
 import parallel_agents.mcp_installer as mcp_installer_module
 import parallel_agents.eval_harness as eval_harness_module
-from parallel_agents.company_artifacts import load_company_artifact_events, persist_company_artifact
+from parallel_agents.company_artifacts import (
+    load_company_artifact,
+    load_company_artifact_events,
+    persist_company_artifact,
+)
 from parallel_agents.eval_harness import (
     EvaluationAnnotations,
     EvaluationResults,
@@ -1133,6 +1138,201 @@ def test_company_templates_branch_name_and_pr_summary_commands(tmp_path):
     assert summary_result.exit_code == 0
     summary_payload = json.loads(summary_result.output)
     assert "Implemented product checkpoint." in summary_payload["summary"]
+    assert Path(summary_payload["output"]).exists()
+    assert "pr-summary" in summary_payload["artifacts"]
+
+
+def test_company_pr_link_updates_issue_plan_and_writes_audit(tmp_path):
+    out_dir = tmp_path / "out"
+    run_id = "run-link-1"
+    runner = _runner()
+
+    persist_company_artifact(
+        out_dir,
+        run_id,
+        "issue-plan",
+        {
+            "run_id": run_id,
+            "repo": "owner/repo",
+            "issue_plan": [
+                {
+                    "source_item_id": "RM-01",
+                    "title": "Define workflow",
+                }
+            ],
+        },
+    )
+
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "company",
+            "pr-link",
+            "--run-id",
+            run_id,
+            "--pr-url",
+            "https://github.com/owner/repo/pull/42",
+            "--output-dir",
+            str(out_dir),
+            "--json-output",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["repo"] == "owner/repo"
+    assert payload["number"] == 42
+    assert payload["linked_artifact_found"] is True
+
+    issue_plan = load_company_artifact(out_dir, run_id, "issue-plan")
+    assert issue_plan is not None
+    assert issue_plan["latest_pr_url"] == "https://github.com/owner/repo/pull/42"
+    assert len(issue_plan["pr_links"]) == 1
+    assert issue_plan["pr_links"][0]["number"] == 42
+
+    pr_link_artifact = load_company_artifact(out_dir, run_id, "pr-link")
+    assert pr_link_artifact is not None
+    assert pr_link_artifact["pr_url"].endswith("/pull/42")
+
+    events = load_company_artifact_events(out_dir, run_id, "pr-link")
+    assert len(events) == 1
+    assert events[0]["payload"]["event"] == "pr_linked"
+    assert events[0]["payload"]["number"] == 42
+
+
+def test_company_pr_create_persists_artifacts_and_links(tmp_path, monkeypatch):
+    out_dir = tmp_path / "out"
+    run_id = "run-pr-create-1"
+    runner = _runner()
+
+    store = create_evidence_store(out_dir, run_id, "file")
+    store.save_final_output(
+        FinalOutput(
+            summary="Complete feature implementation and tests.",
+            risk_report=[],
+            metadata={"tests_run": ["pytest -q"]},
+        )
+    )
+    persist_company_artifact(
+        out_dir,
+        run_id,
+        "issue-plan",
+        {
+            "run_id": run_id,
+            "repo": "owner/repo",
+            "issue_plan": [{"source_item_id": "RM-10", "title": "Ship release workflow"}],
+        },
+    )
+
+    async def fake_create_pr(owner, repo, title, body, head, base="main", draft=False):
+        assert owner == "owner"
+        assert repo == "repo"
+        assert head == "feature/run-pr-create-1"
+        assert base == "main"
+        assert draft is True
+        assert "Complete feature implementation" in body
+        return "https://github.com/owner/repo/pull/88"
+
+    monkeypatch.setattr(main_module, "create_pr", fake_create_pr)
+
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "company",
+            "pr-create",
+            "--run-id",
+            run_id,
+            "--head",
+            "feature/run-pr-create-1",
+            "--output-dir",
+            str(out_dir),
+            "--json-output",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["url"] == "https://github.com/owner/repo/pull/88"
+    assert payload["repo"] == "owner/repo"
+    assert payload["draft"] is True
+    assert payload["pr_link"]["number"] == 88
+
+    pr_create_artifact = load_company_artifact(out_dir, run_id, "pr-create")
+    assert pr_create_artifact is not None
+    assert pr_create_artifact["url"].endswith("/pull/88")
+
+    issue_plan = load_company_artifact(out_dir, run_id, "issue-plan")
+    assert issue_plan is not None
+    assert issue_plan["latest_pr_url"].endswith("/pull/88")
+    assert len(issue_plan["pr_links"]) == 1
+
+    pr_create_events = load_company_artifact_events(out_dir, run_id, "pr-create")
+    assert len(pr_create_events) == 1
+    assert pr_create_events[0]["payload"]["event"] == "pr_created"
+
+
+def test_company_pr_comment_posts_summary_and_risk(tmp_path, monkeypatch):
+    out_dir = tmp_path / "out"
+    run_id = "run-pr-comment-1"
+    runner = _runner()
+
+    store = create_evidence_store(out_dir, run_id, "file")
+    store.save_final_output(
+        FinalOutput(
+            summary="Implemented approval and release checks.",
+            risk_report=[
+                {
+                    "severity": "high",
+                    "category": "security",
+                    "title": "Missing auth guard in admin endpoint",
+                    "description": "Admin action endpoint is not protected.",
+                    "file_path": "src/api/admin.py",
+                }
+            ],
+        )
+    )
+
+    posted_bodies: list[str] = []
+
+    async def fake_post_pr_comment(owner, repo, pr_number, body):
+        assert owner == "owner"
+        assert repo == "repo"
+        assert pr_number == 99
+        posted_bodies.append(body)
+        return True
+
+    monkeypatch.setattr(main_module, "post_pr_comment", fake_post_pr_comment)
+
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "company",
+            "pr-comment",
+            "--run-id",
+            run_id,
+            "--pr-url",
+            "https://github.com/owner/repo/pull/99",
+            "--mode",
+            "both",
+            "--output-dir",
+            str(out_dir),
+            "--json-output",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["posted_all"] is True
+    assert payload["posted_count"] == 2
+    assert payload["attempted_count"] == 2
+    assert len(posted_bodies) == 2
+    assert "Parallel Agents Summary" in posted_bodies[0]
+    assert "Parallel Agents Risk Report" in posted_bodies[1]
+
+    pr_comment_artifact = load_company_artifact(out_dir, run_id, "pr-comment")
+    assert pr_comment_artifact is not None
+    assert pr_comment_artifact["posted_all"] is True
+
+    pr_comment_events = load_company_artifact_events(out_dir, run_id, "pr-comment")
+    assert len(pr_comment_events) == 1
+    assert pr_comment_events[0]["payload"]["event"] == "pr_comments_posted"
 
 
 def test_company_plan_dry_run_from_roadmap(tmp_path):
@@ -1711,6 +1911,10 @@ def test_office_init_creates_project_workspace(tmp_path):
     assert (tmp_path / ".parallel-agents" / "project.json").exists()
     assert (tmp_path / ".parallel-agents" / "runs").is_dir()
     assert (tmp_path / ".parallel-agents" / "artifacts").is_dir()
+    assert (tmp_path / ".parallel-agents" / "memory").is_dir()
+    assert (tmp_path / ".parallel-agents" / "memory" / "decisions.jsonl").exists()
+    assert (tmp_path / ".parallel-agents" / "memory" / "lessons.jsonl").exists()
+    assert (tmp_path / ".parallel-agents" / "memory" / "policies.json").exists()
 
 
 def test_office_status_reports_initialized_workspace(tmp_path):
@@ -1731,6 +1935,7 @@ def test_office_status_reports_initialized_workspace(tmp_path):
     assert payload["initialized"] is True
     assert payload["project"]["name"] == "Status Demo"
     assert payload["directory_exists"]["runs"] is True
+    assert payload["directory_exists"]["memory"] is True
 
 
 def test_office_home_and_artifacts_use_project_workspace(tmp_path):
@@ -1754,6 +1959,24 @@ def test_office_home_and_artifacts_use_project_workspace(tmp_path):
         "issue-plan",
         {"issues": []},
     )
+    memory_result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "memory",
+            "add",
+            "--project",
+            str(tmp_path),
+            "--kind",
+            "decision",
+            "--title",
+            "Use office memory",
+            "--content",
+            "Capture cross-run decisions in workspace files.",
+            "--json-output",
+        ],
+    )
+    assert memory_result.exit_code == 0
 
     home_result = runner.invoke(
         main_module.cli,
@@ -1763,6 +1986,8 @@ def test_office_home_and_artifacts_use_project_workspace(tmp_path):
     home_payload = json.loads(home_result.output)
     assert home_payload["run_count"] >= 1
     assert home_payload["artifact_count"] >= 2
+    assert home_payload["memory_count"] >= 1
+    assert home_payload["memory_counts"]["decision"] >= 1
     assert str(office_output) in home_payload["output_dir"]
 
     runs_result = runner.invoke(
@@ -1799,3 +2024,133 @@ def test_office_home_and_artifacts_use_project_workspace(tmp_path):
     assert one_artifact_result.exit_code == 0
     artifact_payload = json.loads(one_artifact_result.output)
     assert artifact_payload["name"] == "Roadmap A"
+
+
+def test_office_memory_add_list_search_and_policies(tmp_path):
+    runner = _runner()
+    init_result = runner.invoke(
+        main_module.cli,
+        ["office", "init", "--project", str(tmp_path), "--name", "Memory Demo"],
+    )
+    assert init_result.exit_code == 0
+
+    add_result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "memory",
+            "add",
+            "--project",
+            str(tmp_path),
+            "--kind",
+            "decision",
+            "--title",
+            "Use FastAPI Gateway",
+            "--content",
+            "Keep API local-first and reuse CLI execution primitives.",
+            "--tags",
+            "gateway,architecture",
+            "--owner-role",
+            "staff-engineer",
+            "--source",
+            "arch-rfc-12",
+            "--run-id",
+            "run-memory-1",
+            "--json-output",
+        ],
+    )
+    assert add_result.exit_code == 0
+    entry = json.loads(add_result.output)
+    assert entry["kind"] == "decision"
+    assert entry["title"] == "Use FastAPI Gateway"
+
+    list_result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "memory",
+            "list",
+            "--project",
+            str(tmp_path),
+            "--kind",
+            "decision",
+            "--json-output",
+        ],
+    )
+    assert list_result.exit_code == 0
+    list_payload = json.loads(list_result.output)
+    assert list_payload["count"] == 1
+    assert list_payload["entries"][0]["title"] == "Use FastAPI Gateway"
+
+    search_result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "memory",
+            "search",
+            "--project",
+            str(tmp_path),
+            "--query",
+            "local-first",
+            "--json-output",
+        ],
+    )
+    assert search_result.exit_code == 0
+    search_payload = json.loads(search_result.output)
+    assert search_payload["count"] == 1
+    assert search_payload["entries"][0]["id"] == entry["id"]
+
+    policies_path = tmp_path / "policies.json"
+    policies_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "rules": [
+                    {"id": "retain-decisions", "description": "Keep architecture decisions for 12 months"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    set_result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "memory",
+            "policies",
+            "--project",
+            str(tmp_path),
+            "--set-file",
+            str(policies_path),
+            "--json-output",
+        ],
+    )
+    assert set_result.exit_code == 0
+    set_payload = json.loads(set_result.output)
+    assert isinstance(set_payload.get("updated_at"), str)
+    assert len(set_payload.get("rules", [])) == 1
+
+    get_result = runner.invoke(
+        main_module.cli,
+        ["office", "memory", "policies", "--project", str(tmp_path), "--json-output"],
+    )
+    assert get_result.exit_code == 0
+    get_payload = json.loads(get_result.output)
+    assert get_payload["rules"][0]["id"] == "retain-decisions"
+
+
+def test_office_memory_requires_initialized_workspace(tmp_path):
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "memory",
+            "list",
+            "--project",
+            str(tmp_path),
+            "--json-output",
+        ],
+    )
+    assert result.exit_code == main_module.EXIT_RUNTIME_FAILURE
+    assert "Project office is not initialized" in result.output

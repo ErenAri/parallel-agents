@@ -15,6 +15,7 @@ project/
     approvals/
     audit/
     metrics/
+    memory/
 ```
 
 ## Initialize
@@ -25,6 +26,10 @@ parallel-agents office status --project .
 parallel-agents office home --project .
 parallel-agents office artifacts --project .
 parallel-agents office artifacts --project . --run-id run-123
+parallel-agents office memory add --project . --kind decision --title "Architecture call" --content "Use local gateway"
+parallel-agents office memory list --project .
+parallel-agents office memory search --project . --query "gateway"
+parallel-agents office memory policies --project .
 ```
 
 The standalone binary should support the same commands:
@@ -34,6 +39,7 @@ parallel-agents.exe office init --project .
 parallel-agents.exe office status --project .
 parallel-agents.exe office home --project .
 parallel-agents.exe office artifacts --project .
+parallel-agents.exe office memory list --project .
 ```
 
 ## Product Shape

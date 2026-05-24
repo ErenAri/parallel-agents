@@ -35,6 +35,21 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - case-row evidence navigation links to score/gate/breakdown/results/run artifacts
   - approvals queue filters and approved-plan apply action
   - GitHub PR creation flow from desktop with run-linked PR summary artifact
+- Workspace knowledge layer v1:
+  - `parallel-agents office memory add/list/search/policies`
+  - project workspace memory store under `.parallel-agents/memory/`
+  - gateway memory endpoints:
+    - `POST /memory/entries`
+    - `GET /memory/entries`
+    - `GET /memory/search`
+    - `GET /memory/policies`
+    - `PUT /memory/policies`
+- Company workflow run-linking improvements:
+  - `parallel-agents company pr-create` for draft PR creation from run-linked PR summaries
+  - `parallel-agents company pr-link` to persist run-to-PR links
+  - `parallel-agents company pr-comment` to post summary/risk comments on existing PRs
+  - immutable `pr-link` audit events for linkage traceability
+  - `parallel-agents company pr-summary` now persists a run-linked `pr-summary` artifact and markdown file
 
 ## [0.4.3] - 2026-05-22
 

@@ -66,6 +66,58 @@ def test_gateway_health_and_project_creation(tmp_path):
     assert fetched["repo_path"] == "/repo"
 
 
+def test_gateway_memory_endpoints(tmp_path):
+    app = create_gateway_app(tmp_path)
+    client = TestClient(app)
+
+    add = client.post(
+        "/memory/entries",
+        json={
+            "kind": "decision",
+            "title": "Adopt CLI-first flow",
+            "content": "Ship CLI automation before hosted surfaces.",
+            "tags": ["strategy", "product"],
+            "owner_role": "product",
+            "source": "checkpoint",
+            "run_id": "run-100",
+        },
+    )
+    assert add.status_code == 200
+    add_payload = add.json()
+    assert add_payload["entry"]["kind"] == "decision"
+
+    list_all = client.get("/memory/entries")
+    assert list_all.status_code == 200
+    list_payload = list_all.json()
+    assert list_payload["count"] == 1
+    assert list_payload["entries"][0]["title"] == "Adopt CLI-first flow"
+
+    search = client.get("/memory/search", params={"query": "hosted surfaces"})
+    assert search.status_code == 200
+    search_payload = search.json()
+    assert search_payload["count"] == 1
+    assert search_payload["entries"][0]["id"] == add_payload["entry"]["id"]
+
+    initial_policy = client.get("/memory/policies")
+    assert initial_policy.status_code == 200
+    assert "rules" in initial_policy.json()
+
+    policy_update = client.put(
+        "/memory/policies",
+        json={"schema_version": 1, "rules": [{"id": "retention", "days": 365}]},
+    )
+    assert policy_update.status_code == 200
+    policy_payload = policy_update.json()
+    assert isinstance(policy_payload.get("updated_at"), str)
+    assert policy_payload["rules"][0]["id"] == "retention"
+
+    invalid_kind = client.post(
+        "/memory/entries",
+        json={"kind": "unknown", "title": "bad", "content": "bad"},
+    )
+    assert invalid_kind.status_code == 400
+
+
 def test_gateway_company_idea_roadmap_plan_lifecycle(tmp_path):
     app = create_gateway_app(tmp_path)
     client = TestClient(app)

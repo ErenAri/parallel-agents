@@ -104,6 +104,9 @@ parallel-agents company release-check --repo ./my-project --output company/relea
 parallel-agents company post-release --release-id v0.4.3 --release-check company/release-check.json --output company/post-release.json
 parallel-agents company templates --roadmap company/roadmap.json --output company/templates.json
 parallel-agents company branch-name --issue RM-01 --title "Define product and workflow artifacts"
+parallel-agents company pr-create --run-id run-123 --head feature/run-123 --repo owner/repo --draft
+parallel-agents company pr-link --run-id run-123 --pr-url https://github.com/owner/repo/pull/42
+parallel-agents company pr-comment --run-id run-123 --pr-url https://github.com/owner/repo/pull/42 --mode both
 parallel-agents company artifacts --run-id run-123
 
 # Team-gated write flow (approval required before GitHub issue creation)
@@ -121,6 +124,10 @@ parallel-agents office home --project ./my-project
 parallel-agents office artifacts --project ./my-project
 parallel-agents office artifacts --project ./my-project --run-id run-123
 parallel-agents office artifacts --project ./my-project --run-id run-123 --artifact roadmap
+parallel-agents office memory add --project ./my-project --kind decision --title "Choose stack" --content "Python + FastAPI + local SQLite"
+parallel-agents office memory list --project ./my-project
+parallel-agents office memory search --project ./my-project --query "FastAPI"
+parallel-agents office memory policies --project ./my-project
 
 # Internal local gateway/job API
 parallel-agents gateway start --host 127.0.0.1 --port 8733
@@ -173,6 +180,7 @@ my-project/
     approvals/
     audit/
     metrics/
+    memory/
 ```
 
 Initialize it with:
@@ -211,6 +219,11 @@ The local gateway exposes a persistent API for projects, runs, jobs, artifacts, 
 - `POST /projects`
 - `GET /projects`
 - `GET /projects/{project_id}`
+- `POST /memory/entries`
+- `GET /memory/entries`
+- `GET /memory/search`
+- `GET /memory/policies`
+- `PUT /memory/policies`
 - `POST /runs/company/idea`
 - `POST /runs/company/roadmap`
 - `POST /runs/company/plan`
@@ -330,6 +343,7 @@ export PA_STORE_BACKEND=sqlite
 - Company workflow artifacts from idea intake through post-release review.
 - Approval-gated GitHub issue planning with apply-time policy checks.
 - Local `.parallel-agents/` project workspace for desktop/exe-first usage.
+- Local workspace memory layer for decisions, lessons learned, and policy guardrails.
 - Optional local gateway for persistent project/run state with API key or JWT auth.
 - MCP tool discovery payload (`tool_discovery`) for read/write capability and approval metadata.
 

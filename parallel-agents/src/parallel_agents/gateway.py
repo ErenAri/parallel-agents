@@ -36,6 +36,13 @@ from parallel_agents.company_workflows import (
     create_product_brief,
 )
 from parallel_agents.tools.github_tools import parse_repo_ref
+from parallel_agents.workspace_memory import (
+    add_memory_entry,
+    list_memory_entries,
+    load_memory_policies,
+    save_memory_policies,
+    search_memory_entries,
+)
 
 RUN_STATUSES = {
     "queued",
@@ -1261,6 +1268,80 @@ def create_gateway_app(
         if not project:
             raise HTTPException(status_code=404, detail="project not found")
         return project
+
+    @app.post("/memory/entries")
+    def add_memory(payload: dict[str, Any]) -> dict[str, Any]:
+        kind = str(payload.get("kind") or "").strip().lower()
+        title = str(payload.get("title") or "").strip()
+        content = str(payload.get("content") or "").strip()
+        tags_raw = payload.get("tags")
+        if isinstance(tags_raw, list):
+            tags = [str(item).strip() for item in tags_raw if str(item).strip()]
+        elif isinstance(tags_raw, str):
+            tags = [item.strip() for item in tags_raw.split(",") if item.strip()]
+        else:
+            tags = []
+
+        try:
+            entry = add_memory_entry(
+                store.output_dir,
+                kind=kind,
+                title=title,
+                content=content,
+                tags=tags,
+                owner_role=payload.get("owner_role"),
+                source=payload.get("source"),
+                run_id=payload.get("run_id"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"entry": entry}
+
+    @app.get("/memory/entries")
+    def list_memory(
+        kind: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        try:
+            entries = list_memory_entries(store.output_dir, kind=kind, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "kind": kind,
+            "count": len(entries),
+            "entries": entries,
+        }
+
+    @app.get("/memory/search")
+    def search_memory(
+        query: str,
+        kind: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        try:
+            entries = search_memory_entries(store.output_dir, query=query, kind=kind, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "query": query,
+            "kind": kind,
+            "count": len(entries),
+            "entries": entries,
+        }
+
+    @app.get("/memory/policies")
+    def get_memory_policies() -> dict[str, Any]:
+        try:
+            return load_memory_policies(store.output_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/memory/policies")
+    def set_memory_policies(payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return save_memory_policies(store.output_dir, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/mcp/tools")
     def list_mcp_tools() -> dict[str, Any]:

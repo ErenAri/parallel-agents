@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from parallel_agents.workspace_memory import ensure_workspace_memory
+
 OFFICE_DIR_NAME = ".parallel-agents"
 PROJECT_FILE_NAME = "project.json"
 
@@ -36,8 +38,9 @@ def init_project_office(
     base = office_dir(root)
     base.mkdir(parents=True, exist_ok=True)
 
-    for child in ("runs", "artifacts", "approvals", "audit", "metrics"):
+    for child in ("runs", "artifacts", "approvals", "audit", "metrics", "memory"):
         (base / child).mkdir(exist_ok=True)
+    ensure_workspace_memory(base)
 
     project_file = base / PROJECT_FILE_NAME
     existing = load_project_office(root)
@@ -89,6 +92,7 @@ def get_project_office_status(project_root: str | Path | None = None) -> dict[st
         "approvals": base / "approvals",
         "audit": base / "audit",
         "metrics": base / "metrics",
+        "memory": base / "memory",
     }
     return {
         "initialized": bool(project),

@@ -26,6 +26,10 @@ The current release line is focused on local, reviewable workflows and a project
   - immutable approval audit log
   - apply-time repo, label, and milestone policy checks
   - branch naming and workflow templates
+  - run-linked draft PR creation (`company pr-create`)
+  - run-linked PR summary artifact persistence
+  - run-to-PR link artifact with immutable audit events
+  - run-linked PR summary/risk comment posting (`company pr-comment`)
 - Evaluation harness:
   - benchmark dataset execution
   - annotation merge flow for acceptance/regression/finding updates
@@ -40,6 +44,7 @@ The current release line is focused on local, reviewable workflows and a project
   - FastAPI app behind optional dependency group
   - SQLite project/run/job/event store
   - company idea, roadmap, plan, approve, apply, artifact, and event endpoints
+  - workspace memory endpoints (`/memory/entries`, `/memory/search`, `/memory/policies`)
   - in-process queued execution with persistent run/job states
   - run listing plus per-run job inspection
   - cancel and retry controls
@@ -59,6 +64,8 @@ The current release line is focused on local, reviewable workflows and a project
   - `office init`, `office status`, and `office home` commands
   - `office artifacts` for run-linked artifact inspection
   - workspace directories for runs, artifacts, approvals, audit, and metrics
+  - workspace memory files for decisions, lessons, and policies
+  - `office memory add/list/search/policies` for local knowledge capture
   - desktop project-home summary with recent project picker
   - desktop Runs page wired to execute real pipeline runs
   - live run activity stream and per-worker status updates in desktop UI
