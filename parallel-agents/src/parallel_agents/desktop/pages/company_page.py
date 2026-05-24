@@ -193,6 +193,12 @@ class CompanyPage(Page):
         self.dry_run_checkbox = QCheckBox("Dry run")
         self.dry_run_checkbox.setChecked(True)
         self.apply_card.extra_row.addWidget(self.dry_run_checkbox)
+        self.github_auth_button = QPushButton("Check gh auth")
+        self.github_auth_button.clicked.connect(self._check_github_auth)
+        self.apply_card.extra_row.addWidget(self.github_auth_button)
+        self.github_auth_status = QLabel("GitHub auth: unknown")
+        self.github_auth_status.setStyleSheet("color: #8a90a2;")
+        self.apply_card.extra_row.addWidget(self.github_auth_status, stretch=1)
         self.apply_card.extra_row.addStretch(1)
 
         self.pr_card = self._make_card(
@@ -229,6 +235,7 @@ class CompanyPage(Page):
 
         inner_layout.addStretch(1)
         self._refresh_state()
+        self._update_github_auth_label()
 
     # -- factory --------------------------------------------------------
 
@@ -389,7 +396,7 @@ class CompanyPage(Page):
 
     def _run_step(self, card, work, after) -> None:
         card.button.setEnabled(False)
-        card.set_status("running…", "WorkerStatusRunning")
+        card.set_status("running...", "WorkerStatusRunning")
 
         async def _job():
             return work()
@@ -480,9 +487,44 @@ class CompanyPage(Page):
             details=error,
         )
 
+    def _check_github_auth(self) -> None:
+        status = self.engine.github_auth_status()
+        self._update_github_auth_label(status)
+        if not status.installed:
+            QMessageBox.warning(
+                self,
+                "GitHub CLI missing",
+                f"{status.details}\n\nInstall gh and run:\n{status.login_command}",
+            )
+            return
+        if status.authenticated:
+            QMessageBox.information(
+                self,
+                "GitHub auth",
+                f"GitHub CLI is authenticated.\n\n{status.details}",
+            )
+            return
+        QMessageBox.warning(
+            self,
+            "GitHub auth required",
+            f"{status.details}\n\nRun:\n{status.login_command}",
+        )
+
+    def _update_github_auth_label(self, status=None) -> None:
+        if status is None:
+            status = self.engine.github_auth_status()
+        if not status.installed:
+            self.github_auth_status.setText("GitHub auth: gh missing")
+            return
+        if status.authenticated:
+            self.github_auth_status.setText("GitHub auth: connected")
+            return
+        self.github_auth_status.setText("GitHub auth: not connected")
+
     def _refresh_state(self) -> None:
         if self.engine.current_project() is None:
             return
+        self._update_github_auth_label()
         if self._run_id is None:
             latest = self.engine.latest_run_id()
             if latest is not None:

@@ -50,9 +50,16 @@ class ProjectsPage(Page):
 
         new_btn = QPushButton("Initialize New Office...")
         new_btn.clicked.connect(self._init_project)
+        self.doctor_btn = QPushButton("Run Doctor")
+        self.doctor_btn.clicked.connect(self._run_doctor)
+        self.fix_setup_btn = QPushButton("Fix Setup")
+        self.fix_setup_btn.clicked.connect(self._fix_setup)
+        self.fix_setup_btn.setEnabled(False)
 
         actions.addWidget(open_btn)
         actions.addWidget(new_btn)
+        actions.addWidget(self.doctor_btn)
+        actions.addWidget(self.fix_setup_btn)
         actions.addStretch(1)
         self.body_layout.addLayout(actions)
 
@@ -239,6 +246,60 @@ class ProjectsPage(Page):
         info = self.engine.open_project(root)
         self._refresh(info)
 
+    def _run_doctor(self) -> None:
+        current = self.engine.current_project()
+        if current is None:
+            QMessageBox.information(self, "Office Doctor", "Open a project first.")
+            return
+        diagnostics = self.engine.office_diagnostics()
+        checks = diagnostics.get("checks", [])
+        summary_lines = [
+            f"Passed: {diagnostics.get('passed_checks', 0)}",
+            f"Warnings: {diagnostics.get('warning_checks', 0)}",
+            f"Failures: {diagnostics.get('failed_checks', 0)}",
+        ]
+        detail_lines: list[str] = []
+        for item in checks:
+            if not isinstance(item, dict):
+                continue
+            detail_lines.append(
+                f"- {item.get('name', '-')}: {item.get('status', 'unknown')} ({item.get('detail', '')})"
+            )
+        message = QMessageBox(self)
+        message.setWindowTitle("Office Doctor")
+        message.setText("Project diagnostics complete.")
+        message.setInformativeText("\n".join(summary_lines))
+        message.setDetailedText("\n".join(detail_lines) if detail_lines else "No checks available.")
+        message.exec()
+        self._refresh(current)
+
+    def _fix_setup(self) -> None:
+        current = self.engine.current_project()
+        if current is None:
+            QMessageBox.information(self, "Fix Setup", "Open a project first.")
+            return
+        result = self.engine.fix_office_setup()
+        actions = result.actions_taken or ["none"]
+        message_lines = [
+            f"Actions taken: {', '.join(actions)}",
+            f"After -> passed: {result.after.get('passed_checks', 0)}, "
+            f"warnings: {result.after.get('warning_checks', 0)}, "
+            f"failures: {result.after.get('failed_checks', 0)}",
+        ]
+        details = []
+        if result.suggested_commands:
+            details.append("Suggested commands:")
+            details.extend(f"- {command}" for command in result.suggested_commands)
+        else:
+            details.append("No additional commands suggested.")
+        message = QMessageBox(self)
+        message.setWindowTitle("Fix Setup")
+        message.setText("Setup remediation complete.")
+        message.setInformativeText("\n".join(message_lines))
+        message.setDetailedText("\n".join(details))
+        message.exec()
+        self._refresh(current)
+
     def _clear_recent_projects(self) -> None:
         self.history.clear("project_root")
         self._refresh_recent_projects()
@@ -249,11 +310,14 @@ class ProjectsPage(Page):
         self.current_label.setText(info.name)
         home = self.engine.workspace_home()
         self.current_meta.setText(f"{info.root}\nOffice: {info.office_dir}")
+        doctor_status = "healthy" if home.diagnostics_healthy else "attention"
         self.current_stats.setText(
             "Runs: "
             f"{home.run_count}  |  Artifacts: {home.artifact_count}  |  Pending approvals: {home.pending_approval_count}"
+            f"  |  Doctor: {doctor_status} ({home.diagnostics_failures} fail, {home.diagnostics_warnings} warn)"
             + (f"  |  Branch: {home.current_branch}" if home.current_branch else "")
         )
+        self.fix_setup_btn.setEnabled(not home.diagnostics_healthy)
         self._refresh_productivity()
         self.recent_list.clear()
         for run in self.engine.list_runs():

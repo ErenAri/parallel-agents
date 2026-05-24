@@ -25,6 +25,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - runs page now executes real pipeline runs
   - live run activity stream and worker status updates during execution
   - artifact compare against previous runs with inline unified diff view
+  - artifact browser filters (run/artifact/search) and sorting controls
+  - artifact quick actions (`Open File`, `Reveal Folder`, `Export Copy`)
   - release/productivity summary card from eval artifacts (impact, acceptance, regression, gate, cost, duration)
   - metric-history timeline with latest-vs-previous deltas
   - filtered trend view (overall/project/workflow slices, metric/window controls, inline trend rendering)
@@ -34,7 +36,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - comparison drill-down sections for workflow/project/case-level deltas
   - case-row evidence navigation links to score/gate/breakdown/results/run artifacts
   - approvals queue filters and approved-plan apply action
+  - approvals queue bulk approve/reject actions (selected and visible rows)
+  - approvals artifact preview with previous-run diff
+  - approvals audit-event drilldown for run/approval history
   - GitHub PR creation flow from desktop with run-linked PR summary artifact
+  - desktop company flow `gh auth status` check for preflight GitHub readiness
 - Workspace knowledge layer v1:
   - `parallel-agents office memory add/list/search/policies`
   - project workspace memory store under `.parallel-agents/memory/`
@@ -48,8 +54,28 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - `parallel-agents company pr-create` for draft PR creation from run-linked PR summaries
   - `parallel-agents company pr-link` to persist run-to-PR links
   - `parallel-agents company pr-comment` to post summary/risk comments on existing PRs
+  - `parallel-agents company sync-labels` and `parallel-agents company sync-milestones` for template-based GitHub metadata synchronization
   - immutable `pr-link` audit events for linkage traceability
   - `parallel-agents company pr-summary` now persists a run-linked `pr-summary` artifact and markdown file
+- Added `parallel-agents release verify` to automate release checklist checks:
+  - lint (`ruff check src tests`)
+  - tests (`pytest -q`)
+  - package build (`python -m build`)
+  - CLI help surface checks
+  - MCP import check
+  - npm wrapper dry-run pack check
+  - version parity check across `pyproject.toml`, package `__version__`, and `npm-wrapper/package.json`
+- Added `parallel-agents office doctor` for local project-office diagnostics:
+  - workspace initialization/directory checks
+  - toolchain availability checks (`git`, `gh`, `npm`, `claude`)
+  - strict-mode non-zero exit for CI/automation gating
+- Added `parallel-agents office fix-setup` for CLI remediation fallback:
+  - safe local workspace bootstrap when `.parallel-agents/` is missing
+  - post-remediation diagnostics summary
+  - actionable follow-up command suggestions (`gh`, `npm`, `claude`, office init)
+  - strict-mode non-zero exit when warnings/failures remain
+- Desktop project home now displays office-doctor health state with warning/failure counts.
+- Desktop Projects page now includes `Run Doctor` and `Fix Setup` actions for one-click setup checks/remediation.
 
 ## [0.4.3] - 2026-05-22
 

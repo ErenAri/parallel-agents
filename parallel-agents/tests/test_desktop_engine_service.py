@@ -106,6 +106,156 @@ def test_run_pipeline_requires_run_id(tmp_path, monkeypatch):
         asyncio.run(service.run_pipeline("Run without id"))
 
 
+def test_workspace_home_includes_office_diagnostics(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    def fake_run_office_diagnostics(project_root):
+        assert str(project_root) == str(tmp_path)
+        return {
+            "healthy": False,
+            "passed_checks": 3,
+            "warning_checks": 1,
+            "failed_checks": 0,
+            "checks": [
+                {"name": "project-root", "status": "passed"},
+                {"name": "tool:gh", "status": "warning"},
+            ],
+        }
+
+    monkeypatch.setattr(engine_module, "run_office_diagnostics", fake_run_office_diagnostics)
+    home = service.workspace_home()
+    assert home.project_name == tmp_path.name
+    assert home.diagnostics_healthy is False
+    assert home.diagnostics_passed == 3
+    assert home.diagnostics_warnings == 1
+    assert home.diagnostics_failures == 0
+    assert len(home.diagnostics_checks) == 2
+
+
+def test_fix_office_setup_initializes_workspace_and_suggests_commands(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    fix_calls: list[str] = []
+
+    def fake_run_office_setup_fix(project_root):
+        fix_calls.append(str(project_root))
+        return {
+            "project_root": str(project_root),
+            "before": {
+                "office_initialized": False,
+                "failed_checks": 1,
+            },
+            "after": {
+                "office_initialized": True,
+                "passed_checks": 5,
+                "warning_checks": 1,
+                "failed_checks": 0,
+            },
+            "actions_taken": ["initialized_office_workspace"],
+            "suggested_commands": ["gh auth login"],
+        }
+
+    monkeypatch.setattr(engine_module, "run_office_setup_fix", fake_run_office_setup_fix)
+
+    result = service.fix_office_setup()
+
+    assert len(fix_calls) == 1
+    assert result.actions_taken == ["initialized_office_workspace"]
+    assert result.before["office_initialized"] is False
+    assert result.after["office_initialized"] is True
+    assert result.suggested_commands == ["gh auth login"]
+
+
+def test_fix_office_setup_skips_init_when_already_initialized(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    def fake_run_office_setup_fix(project_root):
+        return {
+            "project_root": str(project_root),
+            "before": {
+                "office_initialized": True,
+                "passed_checks": 4,
+                "warning_checks": 2,
+                "failed_checks": 0,
+            },
+            "after": {
+                "office_initialized": True,
+                "passed_checks": 4,
+                "warning_checks": 2,
+                "failed_checks": 0,
+            },
+            "actions_taken": [],
+            "suggested_commands": ["npm --version", "claude --version"],
+        }
+
+    monkeypatch.setattr(engine_module, "run_office_setup_fix", fake_run_office_setup_fix)
+
+    result = service.fix_office_setup()
+
+    assert result.actions_taken == []
+    assert result.suggested_commands == ["npm --version", "claude --version"]
+
+
+def test_github_auth_status_authenticated(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    def fake_run(*args, **kwargs):  # noqa: ANN002, ANN003
+        assert args[0][:3] == ["gh", "auth", "status"]
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "Logged in to github.com as test-user", "stderr": ""},
+        )()
+
+    monkeypatch.setattr(engine_module.subprocess, "run", fake_run)
+    status = service.github_auth_status()
+
+    assert status.installed is True
+    assert status.authenticated is True
+    assert status.status == "authenticated"
+    assert "test-user" in status.details
+
+
+def test_github_auth_status_unauthenticated(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    def fake_run(*args, **kwargs):  # noqa: ANN002, ANN003
+        return type(
+            "Completed",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "You are not logged into any GitHub hosts."},
+        )()
+
+    monkeypatch.setattr(engine_module.subprocess, "run", fake_run)
+    status = service.github_auth_status()
+
+    assert status.installed is True
+    assert status.authenticated is False
+    assert status.status == "unauthenticated"
+    assert "not logged" in status.details.lower()
+
+
+def test_github_auth_status_missing_gh(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    def fake_run(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise FileNotFoundError("gh not found")
+
+    monkeypatch.setattr(engine_module.subprocess, "run", fake_run)
+    status = service.github_auth_status()
+
+    assert status.installed is False
+    assert status.authenticated is False
+    assert status.status == "missing"
+    assert "not installed" in status.details.lower()
+
+
 def test_productivity_snapshot_reads_score_gate_and_breakdown(tmp_path):
     service = EngineService()
     service.open_project(tmp_path)

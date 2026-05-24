@@ -48,6 +48,8 @@ from parallel_agents.project_office import (
     office_dir,
     office_output_dir,
     resolve_project_root,
+    run_office_diagnostics,
+    run_office_setup_fix,
 )
 from parallel_agents.pipeline import Pipeline
 from parallel_agents.config import PipelineConfig
@@ -90,6 +92,19 @@ class WorkspaceHome:
     latest_run_id: str | None
     current_branch: str | None
     recent_runs: list[dict[str, Any]]
+    diagnostics_healthy: bool
+    diagnostics_passed: int
+    diagnostics_warnings: int
+    diagnostics_failures: int
+    diagnostics_checks: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class SetupFixResult:
+    before: dict[str, Any]
+    after: dict[str, Any]
+    actions_taken: list[str] = field(default_factory=list)
+    suggested_commands: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -206,6 +221,15 @@ class PullRequestResult:
 
 
 @dataclass
+class GitHubAuthStatus:
+    installed: bool
+    authenticated: bool
+    status: str
+    details: str
+    login_command: str = "gh auth login -h github.com -w"
+
+
+@dataclass
 class PipelineRunResult:
     run_id: str
     summary: str
@@ -257,6 +281,20 @@ class EngineService:
         if self._current_project is None:
             raise RuntimeError("No project is open. Open a project first.")
         return self._current_project
+
+    def office_diagnostics(self) -> dict[str, Any]:
+        root = self.require_project()
+        return run_office_diagnostics(root)
+
+    def fix_office_setup(self) -> SetupFixResult:
+        root = self.require_project()
+        payload = run_office_setup_fix(root)
+        return SetupFixResult(
+            before=dict(payload.get("before") or {}),
+            after=dict(payload.get("after") or {}),
+            actions_taken=list(payload.get("actions_taken") or []),
+            suggested_commands=list(payload.get("suggested_commands") or []),
+        )
 
     def _load_project_info(self, root: Path) -> ProjectInfo:
         payload = load_project_office(root)
@@ -575,6 +613,50 @@ class EngineService:
             artifact_path=artifact_path,
         )
 
+    def github_auth_status(self) -> GitHubAuthStatus:
+        try:
+            proc = subprocess.run(
+                ["gh", "auth", "status", "--hostname", "github.com"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            return GitHubAuthStatus(
+                installed=False,
+                authenticated=False,
+                status="missing",
+                details="GitHub CLI (`gh`) is not installed or not on PATH.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return GitHubAuthStatus(
+                installed=True,
+                authenticated=False,
+                status="error",
+                details=f"Failed to check gh auth status: {exc}",
+            )
+
+        details = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
+        if stderr:
+            details = f"{details}\n{stderr}".strip()
+        if not details:
+            details = "No output returned from `gh auth status`."
+
+        if proc.returncode == 0:
+            return GitHubAuthStatus(
+                installed=True,
+                authenticated=True,
+                status="authenticated",
+                details=details,
+            )
+        return GitHubAuthStatus(
+            installed=True,
+            authenticated=False,
+            status="unauthenticated",
+            details=details,
+        )
+
     def workspace_home(self) -> WorkspaceHome:
         project = self.current_project()
         if project is None:
@@ -599,6 +681,7 @@ class EngineService:
             )
 
         statuses = [str(entry.get("data", {}).get("status", "pending")) for entry in approvals]
+        diagnostics = run_office_diagnostics(root)
         return WorkspaceHome(
             project_name=project.name,
             project_root=root,
@@ -611,6 +694,11 @@ class EngineService:
             latest_run_id=(runs[0]["id"] if runs else None),
             current_branch=self._git_current_branch(root),
             recent_runs=recent_runs[:8],
+            diagnostics_healthy=bool(diagnostics.get("healthy", False)),
+            diagnostics_passed=int(diagnostics.get("passed_checks", 0)),
+            diagnostics_warnings=int(diagnostics.get("warning_checks", 0)),
+            diagnostics_failures=int(diagnostics.get("failed_checks", 0)),
+            diagnostics_checks=list(diagnostics.get("checks") or []),
         )
 
     def productivity_snapshot(self) -> ProductivitySnapshot:
@@ -1143,6 +1231,37 @@ class EngineService:
             if status is None or data.get("status", "pending") == status:
                 entries.append({"path": path, "data": data})
         return entries
+
+    def list_audit_events(
+        self,
+        *,
+        run_id: str | None = None,
+        approval_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        root = self._current_project
+        if root is None:
+            return []
+        audit_path = office_dir(root) / "audit" / "events.jsonl"
+        if not audit_path.exists():
+            return []
+
+        events: list[dict[str, Any]] = []
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if run_id and str(payload.get("run_id", "")) != run_id:
+                continue
+            if approval_id and str(payload.get("approval_id", "")) != approval_id:
+                continue
+            events.append(payload)
+        if limit > 0:
+            return events[-limit:]
+        return events
 
     def _write_audit(self, run_id: str, event: dict[str, Any]) -> None:
         root = self.require_project()

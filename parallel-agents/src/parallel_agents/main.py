@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -74,6 +78,8 @@ from parallel_agents.project_office import (
     init_project_office,
     list_office_run_ids,
     office_output_dir,
+    run_office_diagnostics,
+    run_office_setup_fix,
 )
 from parallel_agents.workspace_memory import (
     add_memory_entry,
@@ -87,8 +93,13 @@ from parallel_agents.tools.github_apply import (
     issue_field as _issue_field,
 )
 from parallel_agents.tools.github_tools import (
+    create_label,
+    create_milestone,
     create_pr,
     fetch_pull_request,
+    list_labels,
+    list_milestones,
+    update_label,
     parse_pr_url,
     parse_repo_ref,
     post_pr_comment,
@@ -1244,6 +1255,111 @@ def eval_gate(
         sys.exit(EXIT_RUNTIME_FAILURE)
 
 
+@cli.group(name="release")
+def release_group() -> None:
+    """Release-readiness automation commands."""
+    pass
+
+
+@release_group.command(name="verify")
+@click.option(
+    "--project-root",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project root to verify.",
+)
+@click.option("--lint/--no-lint", default=True, show_default=True, help="Run `ruff check src tests`.")
+@click.option("--tests/--no-tests", default=True, show_default=True, help="Run `pytest -q`.")
+@click.option("--build/--no-build", default=True, show_default=True, help="Run `python -m build`.")
+@click.option(
+    "--help-checks/--no-help-checks",
+    default=True,
+    show_default=True,
+    help="Verify CLI help surfaces (`--help`, `company --help`, `eval --help`).",
+)
+@click.option(
+    "--mcp-import/--no-mcp-import",
+    default=True,
+    show_default=True,
+    help="Verify `import parallel_agents.mcp_server` succeeds.",
+)
+@click.option(
+    "--npm-smoke/--no-npm-smoke",
+    default=True,
+    show_default=True,
+    help="Run npm wrapper smoke check (`npm pack --dry-run`).",
+)
+@click.option(
+    "--version-parity/--no-version-parity",
+    default=True,
+    show_default=True,
+    help="Verify version parity across pyproject, package __version__, and npm wrapper.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print verification payload as JSON.")
+def release_verify(
+    project_root: Path,
+    lint: bool,
+    tests: bool,
+    build: bool,
+    help_checks: bool,
+    mcp_import: bool,
+    npm_smoke: bool,
+    version_parity: bool,
+    json_output: bool,
+) -> None:
+    """Run release checklist checks in one command."""
+    try:
+        payload = _run_release_verification(
+            project_root=project_root,
+            lint=lint,
+            tests=tests,
+            build=build,
+            help_checks=help_checks,
+            mcp_import=mcp_import,
+            npm_smoke=npm_smoke,
+            version_parity=version_parity,
+        )
+    except Exception as exc:
+        click.echo(f"Release verification failed: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        table = Table(title="Release Verification")
+        table.add_column("Step")
+        table.add_column("Status")
+        table.add_column("Detail")
+        for step in payload["steps"]:
+            status = str(step.get("status", "unknown"))
+            style = "green" if status == "passed" else ("yellow" if status == "skipped" else "red")
+            table.add_row(
+                str(step.get("name", "-")),
+                f"[{style}]{status}[/{style}]",
+                str(step.get("detail", "")),
+            )
+        console.print(table)
+        console.print(
+            Panel(
+                "\n".join(
+                    [
+                        f"Project root: {payload['project_root']}",
+                        f"Executed: {payload['executed_steps']}",
+                        f"Passed: {payload['passed_steps']}",
+                        f"Failed: {payload['failed_steps']}",
+                        f"Skipped: {payload['skipped_steps']}",
+                    ]
+                ),
+                title="Release Checklist Summary",
+                border_style="green" if payload["failed_steps"] == 0 else "red",
+            )
+        )
+
+    if payload["failed_steps"] > 0:
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+
 @cli.group(name="company")
 def company_group() -> None:
     """Company workflow tooling for idea-to-release planning artifacts."""
@@ -1731,6 +1847,172 @@ def company_templates(
             f"Labels: {len(artifact['labels'])}",
             f"Milestones: {len(artifact['milestones'])}",
             f"Branch format: {artifact['branch_policy']['format']}",
+        ],
+    )
+
+
+@company_group.command(name="sync-labels")
+@click.option(
+    "--repo",
+    "repo_ref",
+    required=True,
+    help="Target GitHub repository (owner/repo or GitHub URL).",
+)
+@click.option(
+    "--roadmap",
+    "roadmap_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Optional RoadmapPlan JSON used to derive templates.",
+)
+@click.option("--dry-run/--no-dry-run", default=True, show_default=True, help="Preview operations without GitHub writes.")
+@click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
+@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@click.option("--json-output/--no-json-output", default=False, help="Print sync result as JSON.")
+def company_sync_labels(
+    repo_ref: str,
+    roadmap_path: Path | None,
+    dry_run: bool,
+    run_id: str | None,
+    output_dir: str,
+    json_output: bool,
+) -> None:
+    """Synchronize recommended workflow labels to a GitHub repository."""
+    parsed_repo = parse_repo_ref(repo_ref)
+    if not parsed_repo:
+        click.echo("Failed to parse --repo. Use owner/repo or a GitHub repository URL.", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+    owner, repo = parsed_repo
+    canonical_repo = f"{owner}/{repo}"
+
+    try:
+        roadmap = _load_model_from_json(roadmap_path, RoadmapPlan) if roadmap_path else None
+        templates = build_github_workflow_templates(roadmap)
+        desired_labels = templates.get("labels")
+        if not isinstance(desired_labels, list):
+            raise ValueError("Template labels payload is invalid.")
+        result = asyncio.run(
+            _sync_github_labels(
+                owner=owner,
+                repo=repo,
+                desired_labels=desired_labels,
+                dry_run=dry_run,
+            )
+        )
+    except Exception as exc:
+        click.echo(f"Failed to sync labels: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    payload = {
+        "repo": canonical_repo,
+        "dry_run": dry_run,
+        "total": len(result),
+        "created": sum(1 for item in result if item.get("action") == "create"),
+        "updated": sum(1 for item in result if item.get("action") == "update"),
+        "unchanged": sum(1 for item in result if item.get("action") == "noop"),
+        "failed": sum(1 for item in result if not item.get("success", True)),
+        "results": result,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    _emit_artifact(
+        payload,
+        output=None,
+        run_id=run_id,
+        output_dir=output_dir,
+        artifact_name="github-label-sync",
+        json_output=json_output,
+        panel_title="GitHub Label Sync",
+        summary_lines=[
+            f"Repository: {canonical_repo}",
+            f"Dry run: {dry_run}",
+            f"Labels: {payload['total']}",
+            f"Create: {payload['created']}",
+            f"Update: {payload['updated']}",
+            f"Unchanged: {payload['unchanged']}",
+            f"Failed: {payload['failed']}",
+        ],
+    )
+
+
+@company_group.command(name="sync-milestones")
+@click.option(
+    "--repo",
+    "repo_ref",
+    required=True,
+    help="Target GitHub repository (owner/repo or GitHub URL).",
+)
+@click.option(
+    "--roadmap",
+    "roadmap_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Optional RoadmapPlan JSON used to derive templates.",
+)
+@click.option("--dry-run/--no-dry-run", default=True, show_default=True, help="Preview operations without GitHub writes.")
+@click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
+@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@click.option("--json-output/--no-json-output", default=False, help="Print sync result as JSON.")
+def company_sync_milestones(
+    repo_ref: str,
+    roadmap_path: Path | None,
+    dry_run: bool,
+    run_id: str | None,
+    output_dir: str,
+    json_output: bool,
+) -> None:
+    """Synchronize recommended workflow milestones to a GitHub repository."""
+    parsed_repo = parse_repo_ref(repo_ref)
+    if not parsed_repo:
+        click.echo("Failed to parse --repo. Use owner/repo or a GitHub repository URL.", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+    owner, repo = parsed_repo
+    canonical_repo = f"{owner}/{repo}"
+
+    try:
+        roadmap = _load_model_from_json(roadmap_path, RoadmapPlan) if roadmap_path else None
+        templates = build_github_workflow_templates(roadmap)
+        desired_milestones = templates.get("milestones")
+        if not isinstance(desired_milestones, list):
+            raise ValueError("Template milestones payload is invalid.")
+        result = asyncio.run(
+            _sync_github_milestones(
+                owner=owner,
+                repo=repo,
+                desired_milestones=desired_milestones,
+                dry_run=dry_run,
+            )
+        )
+    except Exception as exc:
+        click.echo(f"Failed to sync milestones: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    payload = {
+        "repo": canonical_repo,
+        "dry_run": dry_run,
+        "total": len(result),
+        "created": sum(1 for item in result if item.get("action") == "create"),
+        "unchanged": sum(1 for item in result if item.get("action") == "noop"),
+        "failed": sum(1 for item in result if not item.get("success", True)),
+        "results": result,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    _emit_artifact(
+        payload,
+        output=None,
+        run_id=run_id,
+        output_dir=output_dir,
+        artifact_name="github-milestone-sync",
+        json_output=json_output,
+        panel_title="GitHub Milestone Sync",
+        summary_lines=[
+            f"Repository: {canonical_repo}",
+            f"Dry run: {dry_run}",
+            f"Milestones: {payload['total']}",
+            f"Create: {payload['created']}",
+            f"Unchanged: {payload['unchanged']}",
+            f"Failed: {payload['failed']}",
         ],
     )
 
@@ -2600,6 +2882,116 @@ def office_status(project_path: Path, json_output: bool) -> None:
     for name, path in status["directories"].items():
         table.add_row(name, "yes" if status["directory_exists"][name] else "no", path)
     console.print(table)
+
+
+@office_group.command(name="doctor")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option(
+    "--strict/--no-strict",
+    default=False,
+    show_default=True,
+    help="Exit non-zero when warnings/failures are found.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print diagnostics as JSON.")
+def office_doctor(project_path: Path, strict: bool, json_output: bool) -> None:
+    """Run local project-office diagnostics for desktop/CLI readiness."""
+    payload = _run_office_doctor(project_path)
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        table = Table(title="Office Doctor")
+        table.add_column("Check")
+        table.add_column("Status")
+        table.add_column("Detail")
+        for check in payload["checks"]:
+            status = str(check.get("status", "unknown"))
+            style = "green" if status == "passed" else ("yellow" if status == "warning" else "red")
+            table.add_row(
+                str(check.get("name", "-")),
+                f"[{style}]{status}[/{style}]",
+                str(check.get("detail", "")),
+            )
+        console.print(table)
+        console.print(
+            Panel(
+                "\n".join(
+                    [
+                        f"Project root: {payload['project_root']}",
+                        f"Office initialized: {payload['office_initialized']}",
+                        f"Passed: {payload['passed_checks']}",
+                        f"Warnings: {payload['warning_checks']}",
+                        f"Failures: {payload['failed_checks']}",
+                    ]
+                ),
+                title="Office Diagnostics",
+                border_style="green" if payload["healthy"] else "yellow",
+            )
+        )
+
+    if strict and not payload["healthy"]:
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+
+@office_group.command(name="fix-setup")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to remediate.",
+)
+@click.option(
+    "--strict/--no-strict",
+    default=False,
+    show_default=True,
+    help="Exit non-zero when checks remain warning/failed after remediation.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print remediation result as JSON.")
+def office_fix_setup(project_path: Path, strict: bool, json_output: bool) -> None:
+    """Apply safe local setup remediation and return next commands."""
+    payload = run_office_setup_fix(project_path)
+    after = payload.get("after") or {}
+    actions_taken = list(payload.get("actions_taken") or [])
+    suggested_commands = list(payload.get("suggested_commands") or [])
+
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        if actions_taken:
+            actions_text = ", ".join(actions_taken)
+        else:
+            actions_text = "none"
+        lines = [
+            f"Project root: {payload.get('project_root', project_path)}",
+            f"Actions taken: {actions_text}",
+            f"Passed: {after.get('passed_checks', 0)}",
+            f"Warnings: {after.get('warning_checks', 0)}",
+            f"Failures: {after.get('failed_checks', 0)}",
+        ]
+        console.print(
+            Panel(
+                "\n".join(lines),
+                title="Office Setup Fix",
+                border_style="green" if after.get("healthy") else "yellow",
+            )
+        )
+        if suggested_commands:
+            table = Table(title="Suggested Commands")
+            table.add_column("Command")
+            for command in suggested_commands:
+                table.add_row(command)
+            console.print(table)
+
+    if strict and not bool(after.get("healthy")):
+        sys.exit(EXIT_RUNTIME_FAILURE)
 
 
 @office_group.command(name="home")
@@ -3481,6 +3873,218 @@ def _load_run_final_output_payload(output_dir: str, run_id: str) -> dict[str, An
     raise ValueError(f"No final output found for run {run_id}.")
 
 
+def _run_release_verification(
+    *,
+    project_root: Path,
+    lint: bool,
+    tests: bool,
+    build: bool,
+    help_checks: bool,
+    mcp_import: bool,
+    npm_smoke: bool,
+    version_parity: bool,
+) -> dict[str, Any]:
+    root = project_root.resolve()
+    steps: list[dict[str, Any]] = []
+    env = dict(os.environ)
+    src_path = str((root / "src").resolve())
+    env["PYTHONPATH"] = src_path + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+
+    if version_parity:
+        steps.append(_check_release_version_parity(root))
+    else:
+        steps.append({"name": "version-parity", "status": "skipped", "detail": "disabled"})
+
+    if lint:
+        steps.append(
+            _run_release_step(
+                name="ruff-check",
+                command=["ruff", "check", "src", "tests"],
+                cwd=root,
+                env=env,
+            )
+        )
+    else:
+        steps.append({"name": "ruff-check", "status": "skipped", "detail": "disabled"})
+
+    if tests:
+        steps.append(
+            _run_release_step(
+                name="pytest",
+                command=["pytest", "-q"],
+                cwd=root,
+                env=env,
+            )
+        )
+    else:
+        steps.append({"name": "pytest", "status": "skipped", "detail": "disabled"})
+
+    if build:
+        steps.append(
+            _run_release_step(
+                name="python-build",
+                command=[sys.executable, "-m", "build"],
+                cwd=root,
+                env=env,
+            )
+        )
+    else:
+        steps.append({"name": "python-build", "status": "skipped", "detail": "disabled"})
+
+    if help_checks:
+        for args in (
+            ["--help"],
+            ["company", "--help"],
+            ["eval", "--help"],
+            ["release", "--help"],
+        ):
+            steps.append(
+                _run_release_step(
+                    name=f"help:{' '.join(args)}",
+                    command=[sys.executable, "-m", "parallel_agents.main", *args],
+                    cwd=root,
+                    env=env,
+                )
+            )
+    else:
+        steps.append({"name": "help-checks", "status": "skipped", "detail": "disabled"})
+
+    if mcp_import:
+        steps.append(
+            _run_release_step(
+                name="mcp-import",
+                command=[sys.executable, "-c", "import parallel_agents.mcp_server"],
+                cwd=root,
+                env=env,
+            )
+        )
+    else:
+        steps.append({"name": "mcp-import", "status": "skipped", "detail": "disabled"})
+
+    if npm_smoke:
+        npm_dir = root / "npm-wrapper"
+        npm_bin = shutil.which("npm")
+        if not npm_dir.exists():
+            steps.append({"name": "npm-pack-dry-run", "status": "skipped", "detail": "npm-wrapper directory missing"})
+        elif not npm_bin:
+            steps.append({"name": "npm-pack-dry-run", "status": "skipped", "detail": "npm not found in PATH"})
+        else:
+            steps.append(
+                _run_release_step(
+                    name="npm-pack-dry-run",
+                    command=[npm_bin, "pack", "--dry-run"],
+                    cwd=npm_dir,
+                    env=env,
+                )
+            )
+    else:
+        steps.append({"name": "npm-pack-dry-run", "status": "skipped", "detail": "disabled"})
+
+    failed_steps = sum(1 for item in steps if item.get("status") == "failed")
+    passed_steps = sum(1 for item in steps if item.get("status") == "passed")
+    skipped_steps = sum(1 for item in steps if item.get("status") == "skipped")
+    return {
+        "project_root": str(root),
+        "executed_steps": len(steps),
+        "passed_steps": passed_steps,
+        "failed_steps": failed_steps,
+        "skipped_steps": skipped_steps,
+        "steps": steps,
+    }
+
+
+def _run_office_doctor(project_path: Path) -> dict[str, Any]:
+    return run_office_diagnostics(project_path)
+
+
+def _run_release_step(
+    *,
+    name: str,
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    completed = subprocess.run(
+        command,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if completed.returncode == 0:
+        detail = completed.stdout.strip() or "ok"
+        return {
+            "name": name,
+            "status": "passed",
+            "detail": _truncate_release_output(detail),
+            "command": " ".join(command),
+        }
+    detail = completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}"
+    return {
+        "name": name,
+        "status": "failed",
+        "detail": _truncate_release_output(detail),
+        "command": " ".join(command),
+        "returncode": int(completed.returncode),
+    }
+
+
+def _check_release_version_parity(project_root: Path) -> dict[str, Any]:
+    pyproject = project_root / "pyproject.toml"
+    init_file = project_root / "src" / "parallel_agents" / "__init__.py"
+    npm_package = project_root / "npm-wrapper" / "package.json"
+
+    if not pyproject.exists():
+        return {"name": "version-parity", "status": "failed", "detail": "pyproject.toml not found"}
+    if not init_file.exists():
+        return {"name": "version-parity", "status": "failed", "detail": "src/parallel_agents/__init__.py not found"}
+    if not npm_package.exists():
+        return {"name": "version-parity", "status": "failed", "detail": "npm-wrapper/package.json not found"}
+
+    pyproject_data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    project_version = str((pyproject_data.get("project") or {}).get("version") or "").strip()
+    if not project_version:
+        return {"name": "version-parity", "status": "failed", "detail": "project.version missing in pyproject.toml"}
+
+    init_text = init_file.read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', init_text)
+    package_version = match.group(1).strip() if match else ""
+    if not package_version:
+        return {"name": "version-parity", "status": "failed", "detail": "__version__ missing in __init__.py"}
+
+    npm_data = json.loads(npm_package.read_text(encoding="utf-8"))
+    npm_version = str(npm_data.get("version") or "").strip()
+    if not npm_version:
+        return {"name": "version-parity", "status": "failed", "detail": "version missing in npm-wrapper/package.json"}
+
+    versions = {
+        "pyproject": project_version,
+        "package": package_version,
+        "npm": npm_version,
+    }
+    unique_versions = {value for value in versions.values() if value}
+    if len(unique_versions) != 1:
+        return {
+            "name": "version-parity",
+            "status": "failed",
+            "detail": f"mismatch: pyproject={project_version}, package={package_version}, npm={npm_version}",
+            "versions": versions,
+        }
+    return {
+        "name": "version-parity",
+        "status": "passed",
+        "detail": f"all versions match ({project_version})",
+        "versions": versions,
+    }
+
+
+def _truncate_release_output(value: str, limit: int = 400) -> str:
+    text = str(value).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
 def _build_and_persist_pr_summary(
     *,
     output_dir: str,
@@ -3679,6 +4283,159 @@ def _emit_artifact(
         console.print(f"[green]Artifact written to {output}[/green]")
     if persisted_path:
         console.print(f"[green]Run-linked artifact saved to {persisted_path}[/green]")
+
+
+async def _sync_github_labels(
+    *,
+    owner: str,
+    repo: str,
+    desired_labels: list[Any],
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    existing_labels = await list_labels(owner, repo)
+    existing_map = {
+        label.name.strip().lower(): label
+        for label in existing_labels
+        if label.name.strip()
+    }
+    results: list[dict[str, Any]] = []
+
+    for raw in desired_labels:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            continue
+        color = str(raw.get("color", "")).strip().lstrip("#").lower()
+        description = str(raw.get("description", "") or "").strip()
+        existing = existing_map.get(name.lower())
+
+        if existing is None:
+            action = "create"
+            if dry_run:
+                success = True
+            else:
+                created = await create_label(
+                    owner,
+                    repo,
+                    name=name,
+                    color=color or "ededed",
+                    description=description,
+                )
+                success = created is not None
+            results.append(
+                {
+                    "name": name,
+                    "action": action,
+                    "success": success,
+                    "reason": "missing",
+                    "color": color,
+                    "description": description,
+                }
+            )
+            continue
+
+        existing_color = str(existing.color or "").strip().lower()
+        existing_description = str(existing.description or "").strip()
+        requires_update = (
+            (color and existing_color != color)
+            or existing_description != description
+        )
+
+        if not requires_update:
+            results.append(
+                {
+                    "name": name,
+                    "action": "noop",
+                    "success": True,
+                    "reason": "already_matches",
+                    "color": existing_color,
+                    "description": existing_description,
+                }
+            )
+            continue
+
+        if dry_run:
+            success = True
+        else:
+            updated = await update_label(
+                owner,
+                repo,
+                name=name,
+                color=color or existing_color or "ededed",
+                description=description,
+            )
+            success = updated is not None
+        results.append(
+            {
+                "name": name,
+                "action": "update",
+                "success": success,
+                "reason": "mismatch",
+                "desired_color": color,
+                "desired_description": description,
+                "existing_color": existing_color,
+                "existing_description": existing_description,
+            }
+        )
+    return results
+
+
+async def _sync_github_milestones(
+    *,
+    owner: str,
+    repo: str,
+    desired_milestones: list[Any],
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    existing_milestones = await list_milestones(owner, repo, state="all")
+    existing_map = {
+        milestone.title.strip().lower(): milestone
+        for milestone in existing_milestones
+        if milestone.title.strip()
+    }
+    results: list[dict[str, Any]] = []
+
+    for raw in desired_milestones:
+        if not isinstance(raw, dict):
+            continue
+        title = str(raw.get("title", "")).strip()
+        if not title:
+            continue
+        description = str(raw.get("description", "") or "").strip()
+        existing = existing_map.get(title.lower())
+        if existing:
+            results.append(
+                {
+                    "title": title,
+                    "action": "noop",
+                    "success": True,
+                    "reason": "already_exists",
+                    "state": existing.state,
+                }
+            )
+            continue
+
+        if dry_run:
+            success = True
+        else:
+            created = await create_milestone(
+                owner,
+                repo,
+                title=title,
+                description=description,
+            )
+            success = created is not None
+        results.append(
+            {
+                "title": title,
+                "action": "create",
+                "success": success,
+                "reason": "missing",
+                "description": description,
+            }
+        )
+    return results
 
 
 def _artifact_json(artifact: BaseModel | dict[str, Any]) -> str:

@@ -26,6 +26,7 @@ The current release line is focused on local, reviewable workflows and a project
   - immutable approval audit log
   - apply-time repo, label, and milestone policy checks
   - branch naming and workflow templates
+  - GitHub label/milestone synchronization commands (`sync-labels`, `sync-milestones`)
   - run-linked draft PR creation (`company pr-create`)
   - run-linked PR summary artifact persistence
   - run-to-PR link artifact with immutable audit events
@@ -39,6 +40,7 @@ The current release line is focused on local, reviewable workflows and a project
   - baseline vs candidate comparison reports
   - cost/time breakdown reports by project and workflow (`eval breakdown`)
   - CI/release quality gates with threshold checks
+  - consolidated release checklist automation (`release verify`)
   - markdown report output
 - Local gateway foundation:
   - FastAPI app behind optional dependency group
@@ -62,14 +64,19 @@ The current release line is focused on local, reviewable workflows and a project
 - Local desktop/project office foundation:
   - `.parallel-agents/` workspace inside a project folder
   - `office init`, `office status`, and `office home` commands
+  - `office doctor` diagnostics command for local readiness checks
+  - `office fix-setup` CLI fallback for safe local setup remediation
   - `office artifacts` for run-linked artifact inspection
   - workspace directories for runs, artifacts, approvals, audit, and metrics
   - workspace memory files for decisions, lessons, and policies
   - `office memory add/list/search/policies` for local knowledge capture
   - desktop project-home summary with recent project picker
+  - desktop project actions for `Run Doctor` and `Fix Setup`
   - desktop Runs page wired to execute real pipeline runs
   - live run activity stream and per-worker status updates in desktop UI
   - artifact compare view against previous runs (inline unified diff)
+  - artifact browser search/filter/sort controls by run and artifact type
+  - artifact quick actions (open file, reveal folder, export copy)
   - release/productivity summary card in desktop home (impact, acceptance, regression, gate, cost, duration)
   - metric-history timeline with delta vs previous snapshot
   - filtered trend view (overall/project/workflow slices + metric/window controls)
@@ -104,6 +111,8 @@ parallel-agents company apply --run-id run-123
 ```bash
 parallel-agents office init --project . --name "Project Name"
 parallel-agents office status --project .
+parallel-agents office doctor --project .
+parallel-agents office fix-setup --project .
 parallel-agents office home --project .
 parallel-agents office artifacts --project .
 ```

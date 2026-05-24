@@ -93,6 +93,7 @@ parallel-agents eval compare --baseline-results eval/baseline-results.json --can
 parallel-agents eval breakdown --results eval/results.json --output-report eval/breakdown.md --output-json eval/breakdown.json
 parallel-agents eval publish --results eval/results.json --baseline-results eval/baseline-results.json --label release-0.4.4-rc1 --output-json eval/public-benchmark.json --output-report eval/public-benchmark.md
 parallel-agents eval gate --results eval/results.json --min-weighted-impact 0.05 --max-regression-rate 0.10 --min-acceptance-rate 0.70
+parallel-agents release verify --project-root . --json-output
 
 # Build company workflow artifacts
 parallel-agents company idea "Build a no-code repo quality office" --output company/brief.json
@@ -103,6 +104,8 @@ parallel-agents company plan --roadmap company/roadmap.json --repo owner/repo --
 parallel-agents company release-check --repo ./my-project --output company/release-check.json
 parallel-agents company post-release --release-id v0.4.3 --release-check company/release-check.json --output company/post-release.json
 parallel-agents company templates --roadmap company/roadmap.json --output company/templates.json
+parallel-agents company sync-labels --repo owner/repo --roadmap company/roadmap.json --dry-run
+parallel-agents company sync-milestones --repo owner/repo --roadmap company/roadmap.json --dry-run
 parallel-agents company branch-name --issue RM-01 --title "Define product and workflow artifacts"
 parallel-agents company pr-create --run-id run-123 --head feature/run-123 --repo owner/repo --draft
 parallel-agents company pr-link --run-id run-123 --pr-url https://github.com/owner/repo/pull/42
@@ -120,6 +123,8 @@ parallel-agents company apply --run-id run-123 --policy-file company/apply-polic
 # Initialize a project-folder office workspace
 parallel-agents office init --project ./my-project --name "My Project"
 parallel-agents office status --project ./my-project
+parallel-agents office doctor --project ./my-project
+parallel-agents office fix-setup --project ./my-project
 parallel-agents office home --project ./my-project
 parallel-agents office artifacts --project ./my-project
 parallel-agents office artifacts --project ./my-project --run-id run-123
@@ -165,6 +170,7 @@ parallel-agents gateway start --allow-remote-write-tools
 | `parallel-agents company ...` | Generate company workflow artifacts (brief, stack, RFC, roadmap, issue plan, release checks) |
 | `parallel-agents office ...` | Create and inspect a local `.parallel-agents/` project workspace |
 | `parallel-agents eval run/annotate/sync-pr/sync-ci/score/compare/breakdown/publish/gate` | Run, annotate, auto-sync PR acceptance and CI regressions, score, compare, break down cost/time, publish benchmark snapshots, and quality-gate productivity/effectiveness benchmarks |
+| `parallel-agents release verify` | Run consolidated release checklist checks (lint/tests/build/help/mcp/npm/version parity) |
 | `parallel-agents gateway start` | Start the local project/run/job API |
 
 ## Local Project Office
@@ -188,14 +194,19 @@ Initialize it with:
 ```bash
 parallel-agents office init --project ./my-project --name "My Project"
 parallel-agents office status --project ./my-project
+parallel-agents office doctor --project ./my-project --strict
+parallel-agents office fix-setup --project ./my-project --strict
 parallel-agents office home --project ./my-project
 parallel-agents office artifacts --project ./my-project
 ```
 
 Desktop Office (`parallel-agents-desktop`) now includes:
 - project home summary with recent project picker
+- workspace doctor status signal (healthy/attention + warning/failure counts)
 - live pipeline run execution with activity streaming and worker status tiles
 - artifact compare against previous runs (inline unified diff)
+- artifact browser search/filter/sort controls by run and artifact type
+- artifact quick actions (open file, reveal folder, export copy)
 - release/productivity summary from eval artifacts (impact, acceptance, regression, gate, cost, duration)
 - metric-history timeline with latest-vs-previous deltas
 - filtered trend view (overall/project/workflow slices, metric picker, date window)
@@ -204,9 +215,10 @@ Desktop Office (`parallel-agents-desktop`) now includes:
 - cross-run baseline vs candidate comparison with delta report export
 - comparison drill-down by workflow, project, and case-level changes
 - case-row evidence links to underlying score/gate/breakdown/results/run artifacts
-- approvals queue with status filters and approved plan apply action
+- approvals queue with status filters, bulk approve/reject, artifact diff preview, and audit-event drilldown
 - company workflow steps through issue-plan apply
 - GitHub PR creation from run context with generated PR summary markdown
+- built-in `gh auth status` check from the Company flow before live GitHub writes
 
 The gateway remains an internal job API for local automation and future desktop shells. It is not the primary product UI.
 

@@ -11,6 +11,7 @@ import logging
 import re
 import shutil
 from dataclasses import dataclass
+from urllib.parse import quote
 
 logger = logging.getLogger("parallel_agents.github")
 
@@ -32,6 +33,13 @@ class GitHubMilestone:
     number: int | None = None
     state: str = "open"
     url: str = ""
+
+
+@dataclass
+class GitHubLabel:
+    name: str
+    color: str = ""
+    description: str = ""
 
 
 @dataclass
@@ -239,6 +247,130 @@ async def create_pr(
     if rc == 0:
         return stdout.strip()
     return None
+
+
+async def list_labels(owner: str, repo: str) -> list[GitHubLabel]:
+    """List repository labels via gh api."""
+    if not _gh_available():
+        logger.warning("gh CLI not found. Cannot list labels.")
+        return []
+
+    stdout, rc = await _run_gh(
+        "api",
+        f"repos/{owner}/{repo}/labels",
+        "--paginate",
+    )
+    if rc != 0:
+        return []
+
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+
+    labels: list[GitHubLabel] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        labels.append(
+            GitHubLabel(
+                name=str(item.get("name", "")).strip(),
+                color=str(item.get("color", "")).strip().lower(),
+                description=str(item.get("description", "") or "").strip(),
+            )
+        )
+    return [label for label in labels if label.name]
+
+
+async def create_label(
+    owner: str,
+    repo: str,
+    *,
+    name: str,
+    color: str,
+    description: str = "",
+) -> GitHubLabel | None:
+    """Create a repository label via gh api."""
+    if not _gh_available():
+        logger.warning("gh CLI not found. Cannot create label.")
+        return None
+
+    clean_name = str(name).strip()
+    clean_color = str(color).strip().lstrip("#").lower()
+    if not clean_name or not clean_color:
+        return None
+
+    args = [
+        "api",
+        "--method",
+        "POST",
+        f"repos/{owner}/{repo}/labels",
+        "-f",
+        f"name={clean_name}",
+        "-f",
+        f"color={clean_color}",
+    ]
+    if description:
+        args.extend(["-f", f"description={description}"])
+    stdout, rc = await _run_gh(*args)
+    if rc != 0:
+        return None
+
+    try:
+        payload = json.loads(stdout)
+        return GitHubLabel(
+            name=str(payload.get("name", clean_name)).strip(),
+            color=str(payload.get("color", clean_color)).strip().lower(),
+            description=str(payload.get("description", "") or "").strip(),
+        )
+    except json.JSONDecodeError:
+        return GitHubLabel(name=clean_name, color=clean_color, description=description.strip())
+
+
+async def update_label(
+    owner: str,
+    repo: str,
+    *,
+    name: str,
+    color: str,
+    description: str = "",
+) -> GitHubLabel | None:
+    """Update a repository label via gh api."""
+    if not _gh_available():
+        logger.warning("gh CLI not found. Cannot update label.")
+        return None
+
+    clean_name = str(name).strip()
+    clean_color = str(color).strip().lstrip("#").lower()
+    if not clean_name or not clean_color:
+        return None
+
+    args = [
+        "api",
+        "--method",
+        "PATCH",
+        f"repos/{owner}/{repo}/labels/{quote(clean_name, safe='')}",
+        "-f",
+        f"new_name={clean_name}",
+        "-f",
+        f"color={clean_color}",
+    ]
+    args.extend(["-f", f"description={description or ''}"])
+    stdout, rc = await _run_gh(*args)
+    if rc != 0:
+        return None
+
+    try:
+        payload = json.loads(stdout)
+        return GitHubLabel(
+            name=str(payload.get("name", clean_name)).strip(),
+            color=str(payload.get("color", clean_color)).strip().lower(),
+            description=str(payload.get("description", "") or "").strip(),
+        )
+    except json.JSONDecodeError:
+        return GitHubLabel(name=clean_name, color=clean_color, description=(description or "").strip())
 
 
 async def list_milestones(owner: str, repo: str, state: str = "all") -> list[GitHubMilestone]:

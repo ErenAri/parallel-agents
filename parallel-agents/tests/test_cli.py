@@ -12,6 +12,7 @@ import parallel_agents.main as main_module
 import parallel_agents.mcp_installer as mcp_installer_module
 import parallel_agents.eval_harness as eval_harness_module
 from parallel_agents.company_artifacts import (
+    list_company_artifact_paths,
     load_company_artifact,
     load_company_artifact_events,
     persist_company_artifact,
@@ -1142,6 +1143,167 @@ def test_company_templates_branch_name_and_pr_summary_commands(tmp_path):
     assert "pr-summary" in summary_payload["artifacts"]
 
 
+def test_company_sync_labels_dry_run_and_live(tmp_path, monkeypatch):
+    out_dir = tmp_path / "out"
+    runner = _runner()
+
+    class _Label:
+        def __init__(self, name: str, color: str, description: str):
+            self.name = name
+            self.color = color
+            self.description = description
+
+    async def fake_list_labels(owner: str, repo: str):
+        assert owner == "owner"
+        assert repo == "repo"
+        return [_Label("planning", "ffffff", "old description")]
+
+    create_calls: list[tuple[str, str, str]] = []
+    update_calls: list[tuple[str, str, str]] = []
+
+    async def fake_create_label(owner: str, repo: str, *, name: str, color: str, description: str = ""):
+        create_calls.append((name, color, description))
+        return _Label(name, color, description)
+
+    async def fake_update_label(owner: str, repo: str, *, name: str, color: str, description: str = ""):
+        update_calls.append((name, color, description))
+        return _Label(name, color, description)
+
+    monkeypatch.setattr(main_module, "list_labels", fake_list_labels)
+    monkeypatch.setattr(main_module, "create_label", fake_create_label)
+    monkeypatch.setattr(main_module, "update_label", fake_update_label)
+
+    dry_result = runner.invoke(
+        main_module.cli,
+        [
+            "company",
+            "sync-labels",
+            "--repo",
+            "owner/repo",
+            "--dry-run",
+            "--run-id",
+            "run-sync-labels",
+            "--output-dir",
+            str(out_dir),
+            "--json-output",
+        ],
+    )
+    assert dry_result.exit_code == 0
+    dry_payload = json.loads(dry_result.output)
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["updated"] >= 1
+    assert dry_payload["created"] >= 1
+    assert not create_calls
+    assert not update_calls
+    assert "github-label-sync" in list_company_artifact_paths(out_dir, "run-sync-labels")
+
+    live_result = runner.invoke(
+        main_module.cli,
+        [
+            "company",
+            "sync-labels",
+            "--repo",
+            "owner/repo",
+            "--no-dry-run",
+            "--output-dir",
+            str(out_dir),
+            "--json-output",
+        ],
+    )
+    assert live_result.exit_code == 0
+    live_payload = json.loads(live_result.output)
+    assert live_payload["dry_run"] is False
+    assert len(create_calls) >= 1
+    assert len(update_calls) >= 1
+
+
+def test_company_sync_milestones_dry_run_and_live(tmp_path, monkeypatch):
+    out_dir = tmp_path / "out"
+    roadmap_path = tmp_path / "roadmap.json"
+    runner = _runner()
+
+    runner.invoke(
+        main_module.cli,
+        ["company", "idea", "Build milestone sync", "--output", str(tmp_path / "brief.json"), "--json-output"],
+    )
+    runner.invoke(
+        main_module.cli,
+        [
+            "company",
+            "roadmap",
+            "--brief",
+            str(tmp_path / "brief.json"),
+            "--output",
+            str(roadmap_path),
+            "--json-output",
+        ],
+    )
+
+    class _Milestone:
+        def __init__(self, title: str, state: str = "open"):
+            self.title = title
+            self.state = state
+
+    async def fake_list_milestones(owner: str, repo: str, state: str = "all"):
+        assert owner == "owner"
+        assert repo == "repo"
+        assert state == "all"
+        return [_Milestone("M1")]
+
+    create_calls: list[tuple[str, str]] = []
+
+    async def fake_create_milestone(owner: str, repo: str, title: str, description: str = ""):
+        create_calls.append((title, description))
+        return _Milestone(title)
+
+    monkeypatch.setattr(main_module, "list_milestones", fake_list_milestones)
+    monkeypatch.setattr(main_module, "create_milestone", fake_create_milestone)
+
+    dry_result = runner.invoke(
+        main_module.cli,
+        [
+            "company",
+            "sync-milestones",
+            "--repo",
+            "owner/repo",
+            "--roadmap",
+            str(roadmap_path),
+            "--dry-run",
+            "--run-id",
+            "run-sync-milestones",
+            "--output-dir",
+            str(out_dir),
+            "--json-output",
+        ],
+    )
+    assert dry_result.exit_code == 0
+    dry_payload = json.loads(dry_result.output)
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["created"] >= 1
+    assert not create_calls
+    assert "github-milestone-sync" in list_company_artifact_paths(out_dir, "run-sync-milestones")
+
+    live_result = runner.invoke(
+        main_module.cli,
+        [
+            "company",
+            "sync-milestones",
+            "--repo",
+            "owner/repo",
+            "--roadmap",
+            str(roadmap_path),
+            "--no-dry-run",
+            "--output-dir",
+            str(out_dir),
+            "--json-output",
+        ],
+    )
+    assert live_result.exit_code == 0
+    live_payload = json.loads(live_result.output)
+    assert live_payload["dry_run"] is False
+    assert len(create_calls) >= 1
+
+
 def test_company_pr_link_updates_issue_plan_and_writes_audit(tmp_path):
     out_dir = tmp_path / "out"
     run_id = "run-link-1"
@@ -1898,6 +2060,87 @@ def test_gateway_start_passes_remote_write_option(monkeypatch, tmp_path):
     assert captured["allow_remote_write_tools"] is True
 
 
+def test_release_verify_json_success(monkeypatch, tmp_path):
+    expected = {
+        "project_root": str(tmp_path),
+        "executed_steps": 3,
+        "passed_steps": 3,
+        "failed_steps": 0,
+        "skipped_steps": 0,
+        "steps": [
+            {"name": "version-parity", "status": "passed", "detail": "all versions match (0.4.3)"},
+            {"name": "ruff-check", "status": "passed", "detail": "ok"},
+            {"name": "pytest", "status": "passed", "detail": "ok"},
+        ],
+    }
+
+    def fake_run_release_verification(**kwargs):
+        assert str(kwargs["project_root"]) == str(tmp_path)
+        return expected
+
+    monkeypatch.setattr(main_module, "_run_release_verification", fake_run_release_verification)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["release", "verify", "--project-root", str(tmp_path), "--json-output"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["failed_steps"] == 0
+    assert payload["executed_steps"] == 3
+
+
+def test_release_verify_exits_nonzero_when_failed(monkeypatch, tmp_path):
+    def fake_run_release_verification(**kwargs):
+        return {
+            "project_root": str(tmp_path),
+            "executed_steps": 1,
+            "passed_steps": 0,
+            "failed_steps": 1,
+            "skipped_steps": 0,
+            "steps": [
+                {"name": "python-build", "status": "failed", "detail": "No module named build"},
+            ],
+        }
+
+    monkeypatch.setattr(main_module, "_run_release_verification", fake_run_release_verification)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["release", "verify", "--project-root", str(tmp_path), "--json-output"],
+    )
+    assert result.exit_code == main_module.EXIT_RUNTIME_FAILURE
+
+
+def test_check_release_version_parity(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    package_init = tmp_path / "src" / "parallel_agents" / "__init__.py"
+    npm_package = tmp_path / "npm-wrapper" / "package.json"
+    package_init.parent.mkdir(parents=True)
+    npm_package.parent.mkdir(parents=True)
+
+    pyproject.write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "parallel-agents"',
+                'version = "0.4.3"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    package_init.write_text('__version__ = "0.4.3"\n', encoding="utf-8")
+    npm_package.write_text('{"name":"parallel-agents","version":"0.4.3"}', encoding="utf-8")
+
+    ok = main_module._check_release_version_parity(tmp_path)
+    assert ok["status"] == "passed"
+
+    package_init.write_text('__version__ = "0.4.2"\n', encoding="utf-8")
+    mismatch = main_module._check_release_version_parity(tmp_path)
+    assert mismatch["status"] == "failed"
+    assert "mismatch" in mismatch["detail"]
+
+
 def test_office_init_creates_project_workspace(tmp_path):
     runner = _runner()
     result = runner.invoke(
@@ -1936,6 +2179,123 @@ def test_office_status_reports_initialized_workspace(tmp_path):
     assert payload["project"]["name"] == "Status Demo"
     assert payload["directory_exists"]["runs"] is True
     assert payload["directory_exists"]["memory"] is True
+
+
+def test_office_doctor_json_output(monkeypatch, tmp_path):
+    expected = {
+        "project_root": str(tmp_path),
+        "office_dir": str(tmp_path / ".parallel-agents"),
+        "office_initialized": True,
+        "passed_checks": 4,
+        "warning_checks": 1,
+        "failed_checks": 0,
+        "healthy": False,
+        "checks": [
+            {"name": "project-root", "status": "passed", "detail": str(tmp_path)},
+            {"name": "tool:gh", "status": "warning", "detail": "not found in PATH"},
+        ],
+    }
+
+    def fake_run_office_doctor(project_path):
+        assert str(project_path) == str(tmp_path)
+        return expected
+
+    monkeypatch.setattr(main_module, "_run_office_doctor", fake_run_office_doctor)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["office", "doctor", "--project", str(tmp_path), "--json-output"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["warning_checks"] == 1
+    assert payload["healthy"] is False
+
+
+def test_office_doctor_strict_exits_nonzero(monkeypatch, tmp_path):
+    def fake_run_office_doctor(project_path):
+        return {
+            "project_root": str(tmp_path),
+            "office_dir": str(tmp_path / ".parallel-agents"),
+            "office_initialized": False,
+            "passed_checks": 1,
+            "warning_checks": 1,
+            "failed_checks": 1,
+            "healthy": False,
+            "checks": [
+                {"name": "project-root", "status": "passed", "detail": str(tmp_path)},
+                {"name": "office-initialized", "status": "failed", "detail": "run init"},
+            ],
+        }
+
+    monkeypatch.setattr(main_module, "_run_office_doctor", fake_run_office_doctor)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["office", "doctor", "--project", str(tmp_path), "--strict", "--json-output"],
+    )
+    assert result.exit_code == main_module.EXIT_RUNTIME_FAILURE
+
+
+def test_office_fix_setup_json_output(monkeypatch, tmp_path):
+    expected = {
+        "project_root": str(tmp_path),
+        "before": {
+            "office_initialized": False,
+            "passed_checks": 1,
+            "warning_checks": 0,
+            "failed_checks": 1,
+        },
+        "after": {
+            "office_initialized": True,
+            "passed_checks": 4,
+            "warning_checks": 1,
+            "failed_checks": 0,
+            "healthy": False,
+        },
+        "actions_taken": ["initialized_office_workspace"],
+        "suggested_commands": ["gh auth login"],
+    }
+
+    def fake_run_office_setup_fix(project_path):
+        assert str(project_path) == str(tmp_path)
+        return expected
+
+    monkeypatch.setattr(main_module, "run_office_setup_fix", fake_run_office_setup_fix)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["office", "fix-setup", "--project", str(tmp_path), "--json-output"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["actions_taken"] == ["initialized_office_workspace"]
+    assert payload["after"]["failed_checks"] == 0
+
+
+def test_office_fix_setup_strict_exits_nonzero(monkeypatch, tmp_path):
+    def fake_run_office_setup_fix(_project_path):
+        return {
+            "project_root": str(tmp_path),
+            "before": {"office_initialized": True},
+            "after": {
+                "office_initialized": True,
+                "passed_checks": 2,
+                "warning_checks": 1,
+                "failed_checks": 0,
+                "healthy": False,
+            },
+            "actions_taken": [],
+            "suggested_commands": ["npm --version"],
+        }
+
+    monkeypatch.setattr(main_module, "run_office_setup_fix", fake_run_office_setup_fix)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        ["office", "fix-setup", "--project", str(tmp_path), "--strict", "--json-output"],
+    )
+    assert result.exit_code == main_module.EXIT_RUNTIME_FAILURE
 
 
 def test_office_home_and_artifacts_use_project_workspace(tmp_path):

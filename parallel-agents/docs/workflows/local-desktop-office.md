@@ -23,6 +23,8 @@ project/
 ```bash
 parallel-agents office init --project . --name "Project Name"
 parallel-agents office status --project .
+parallel-agents office doctor --project .
+parallel-agents office fix-setup --project .
 parallel-agents office home --project .
 parallel-agents office artifacts --project .
 parallel-agents office artifacts --project . --run-id run-123
@@ -37,6 +39,8 @@ The standalone binary should support the same commands:
 ```bash
 parallel-agents.exe office init --project .
 parallel-agents.exe office status --project .
+parallel-agents.exe office doctor --project .
+parallel-agents.exe office fix-setup --project .
 parallel-agents.exe office home --project .
 parallel-agents.exe office artifacts --project .
 parallel-agents.exe office memory list --project .
@@ -47,12 +51,15 @@ parallel-agents.exe office memory list --project .
 The desktop office should eventually provide:
 
 - project selection rooted in a local folder
+- immediate workspace-health diagnostics signal from `office doctor`
+- one-click setup remediation path from desktop (`Fix Setup`) and CLI (`office fix-setup`)
 - idea-to-release workflow controls
 - run queue and worker status
-- approval queue before write actions
+- approval queue before write actions, including bulk actions, artifact diff preview, and audit drilldown
 - artifact browser for brief, roadmap, RFC, issue plan, release checks
+- artifact-browser controls for search/filter/sort and quick open/export actions
 - local metrics and audit history
-- optional GitHub and MCP integrations
+- optional GitHub and MCP integrations (with explicit `gh` auth checks in desktop flow)
 
 ## Non-Goals
 

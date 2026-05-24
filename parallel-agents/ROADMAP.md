@@ -21,11 +21,11 @@ Completed:
 - Evidence storage with file and SQLite backends.
 - Product vision, PR/FAQ, operating model, quality bar, tech stack policy, and workflow docs.
 - Release hygiene docs and compatibility notes.
+- Consolidated release checklist command (`parallel-agents release verify`).
 
 Remaining:
 
 - Keep package metadata, changelog, README, and examples synchronized for each release.
-- Keep release checks repeatable before publishing.
 
 ## Phase 1: Company Workflow Models
 
@@ -64,10 +64,10 @@ Completed:
 - Draft PR creation from run-linked summaries (`company pr-create`).
 - PR summary/risk GitHub comment posting (`company pr-comment`).
 - Run-to-PR linking artifacts and immutable PR-link audit events.
+- GitHub label/milestone synchronization commands (`company sync-labels`, `company sync-milestones`).
 
 Remaining:
-
-- GitHub label/milestone synchronization commands.
+- Deeper GitHub workflow automation beyond issue/PR surface.
 
 ## Phase 3: Gateway and Job System
 
@@ -104,7 +104,11 @@ Completed:
 - Project-folder workspace layout under `.parallel-agents/`.
 - `parallel-agents office init` to create local workspace metadata and directories.
 - `parallel-agents office status` to inspect workspace health.
+- `parallel-agents office doctor` to run local readiness diagnostics and strict checks.
+- `parallel-agents office fix-setup` for safe CLI remediation fallback.
 - Desktop project-home summary and recent project picker.
+- Desktop project-home card now surfaces doctor health status and warning/failure counts.
+- Desktop Projects page now provides one-click `Run Doctor` and `Fix Setup` actions.
 - Desktop approvals queue filters with approved issue-plan apply action.
 - Desktop GitHub PR creation with run-linked PR summary artifact.
 - Workspace knowledge layer v1:
