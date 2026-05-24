@@ -1,11 +1,43 @@
-/.claude
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
 
-# Local run/cache artifacts
-/.parallel-agents-output/
-/.ruff_cache/
+# Virtual environments
+.venv/
+venv/
+env/
 
-# Project-local tool configs and caches
-/parallel-agents/.mcp.json
-/parallel-agents/.parallel-agents-output/
-/parallel-agents/.parallel-agents/
-/parallel-agents/.ruff_cache/
+# IDE
+.vscode/
+.idea/
+*.swp
+.mcp.json
+.ruff_cache/
+
+# Evidence store output
+.parallel-agents-output/
+.parallel-agents/
+
+# PyInstaller
+*.spec.bak
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# npm wrapper
+npm-wrapper/node_modules/
+
+# pytest
+.pytest_cache/
+
+# local assistant workspace
+.claude/
