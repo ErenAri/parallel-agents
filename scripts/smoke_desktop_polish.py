@@ -97,6 +97,72 @@ def main() -> int:
     assert llm_indicator_text() == "LLM: brief, rfc"
     print(f"LLM indicator text: {llm_indicator_text()}")
 
+    # --- 5. history store: round-trip, de-dup, cap, malformed file ---
+    from parallel_agents.desktop.services.history import DEFAULT_LIMIT, HistoryStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        hist_path = Path(tmp) / "history.json"
+        hist = HistoryStore(path=hist_path)
+
+        assert hist.get("repo_path") == []
+        assert hist.add("repo_path", "  ") == []  # blank ignored
+
+        hist.add("repo_path", "C:/projects/alpha")
+        hist.add("repo_path", "C:/projects/beta")
+        assert hist.get("repo_path") == ["C:/projects/beta", "C:/projects/alpha"]
+
+        # re-add moves to front without duplication
+        hist.add("repo_path", "C:/projects/alpha")
+        assert hist.get("repo_path") == ["C:/projects/alpha", "C:/projects/beta"]
+
+        # cap at DEFAULT_LIMIT entries
+        for i in range(DEFAULT_LIMIT + 3):
+            hist.add("repo_ref", f"owner/repo-{i}")
+        capped = hist.get("repo_ref")
+        assert len(capped) == DEFAULT_LIMIT
+        assert capped[0] == f"owner/repo-{DEFAULT_LIMIT + 2}"
+
+        # keys are independent
+        assert hist.get("repo_path") == ["C:/projects/alpha", "C:/projects/beta"]
+
+        hist.clear("repo_path")
+        assert hist.get("repo_path") == []
+        assert len(hist.get("repo_ref")) == DEFAULT_LIMIT
+
+        # malformed file degrades to empty, then recovers on next add
+        hist_path.write_text("{not json", encoding="utf-8")
+        assert hist.get("repo_ref") == []
+        assert hist.add("repo_ref", "owner/fresh") == ["owner/fresh"]
+        print("history store round-trip/de-dup/cap: ok")
+
+    # --- 6. engine roadmap_milestones helper ---
+    from parallel_agents.desktop.services.engine import EngineService
+    from parallel_agents.project_office import office_output_dir
+
+    with tempfile.TemporaryDirectory() as proj_tmp:
+        engine = EngineService()
+        assert engine.roadmap_milestones(None) == []
+
+        engine.init_project(proj_tmp, name="smoke")
+        assert engine.roadmap_milestones("no-such-run") == []
+
+        run_dir = office_output_dir(Path(proj_tmp)) / "run-smoke" / "company"
+        run_dir.mkdir(parents=True)
+        roadmap = {
+            "name": "Smoke Roadmap",
+            "horizon_weeks": 6,
+            "outcomes": ["ship"],
+            "items": [
+                {"id": "R1", "title": "a", "owner_role": "eng", "milestone": "M1"},
+                {"id": "R2", "title": "b", "owner_role": "eng", "milestone": "M2"},
+                {"id": "R3", "title": "c", "owner_role": "eng", "milestone": "M1"},
+                {"id": "R4", "title": "d", "owner_role": "eng", "milestone": "  "},
+            ],
+        }
+        (run_dir / "roadmap.json").write_text(json.dumps(roadmap), encoding="utf-8")
+        assert engine.roadmap_milestones("run-smoke") == ["M1", "M2"]
+        print("engine roadmap_milestones ordered/unique/empty: ok")
+
     print("\nOK: polish slice smoke tests pass.")
     return 0
 

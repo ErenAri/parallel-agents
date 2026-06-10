@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from parallel_agents.desktop._qt import (
@@ -86,6 +87,7 @@ class CompanyPage(Page):
         self.engine = engine
         self.history = HistoryStore()
         self._job: AsyncJob | None = None
+        self._auth_job: AsyncJob | None = None
         self._run_id: str | None = None
 
         # --- scrollable body since the workflow is long ---
@@ -235,7 +237,7 @@ class CompanyPage(Page):
 
         inner_layout.addStretch(1)
         self._refresh_state()
-        self._update_github_auth_label()
+        self._refresh_github_auth_label()
 
     # -- factory --------------------------------------------------------
 
@@ -346,7 +348,7 @@ class CompanyPage(Page):
         rid = self._run_id
         self._run_step(
             self.apply_card,
-            lambda: self.engine.apply_issue_plan(rid, dry_run=dry_run),
+            lambda: self.engine.apply_issue_plan_async(rid, dry_run=dry_run),
             after=self._on_apply_done,
         )
 
@@ -367,7 +369,7 @@ class CompanyPage(Page):
         rid = self._run_id
         self._run_step(
             self.pr_card,
-            lambda: self.engine.create_pull_request(
+            lambda: self.engine.create_pull_request_async(
                 rid,
                 repo_ref=repo,
                 head=head,
@@ -395,11 +397,19 @@ class CompanyPage(Page):
         return True
 
     def _run_step(self, card, work, after) -> None:
+        if self._job is not None and self._job.isRunning():
+            QMessageBox.information(
+                self, "Step running", "Another step is still running. Wait for it to finish."
+            )
+            return
         card.button.setEnabled(False)
         card.set_status("running...", "WorkerStatusRunning")
 
         async def _job():
-            return work()
+            result = work()
+            if inspect.isawaitable(result):
+                result = await result
+            return result
 
         self._job = AsyncJob(_job)
         self._job.finished_ok.connect(after)
@@ -488,7 +498,9 @@ class CompanyPage(Page):
         )
 
     def _check_github_auth(self) -> None:
-        status = self.engine.github_auth_status()
+        self._start_auth_check(self._on_github_auth_checked)
+
+    def _on_github_auth_checked(self, status) -> None:
         self._update_github_auth_label(status)
         if not status.installed:
             QMessageBox.warning(
@@ -510,9 +522,26 @@ class CompanyPage(Page):
             f"{status.details}\n\nRun:\n{status.login_command}",
         )
 
-    def _update_github_auth_label(self, status=None) -> None:
-        if status is None:
-            status = self.engine.github_auth_status()
+    def _refresh_github_auth_label(self) -> None:
+        self._start_auth_check(self._update_github_auth_label)
+
+    def _start_auth_check(self, on_done) -> None:
+        """Run `gh auth status` (a subprocess) off the UI thread."""
+        if self._auth_job is not None and self._auth_job.isRunning():
+            return
+        self.github_auth_status.setText("GitHub auth: checking...")
+
+        async def _job():
+            return self.engine.github_auth_status()
+
+        self._auth_job = AsyncJob(_job)
+        self._auth_job.finished_ok.connect(on_done)
+        self._auth_job.failed.connect(
+            lambda _err: self.github_auth_status.setText("GitHub auth: unknown")
+        )
+        self._auth_job.start()
+
+    def _update_github_auth_label(self, status) -> None:
         if not status.installed:
             self.github_auth_status.setText("GitHub auth: gh missing")
             return
@@ -524,7 +553,7 @@ class CompanyPage(Page):
     def _refresh_state(self) -> None:
         if self.engine.current_project() is None:
             return
-        self._update_github_auth_label()
+        self._refresh_github_auth_label()
         if self._run_id is None:
             latest = self.engine.latest_run_id()
             if latest is not None:

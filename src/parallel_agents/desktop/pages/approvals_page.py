@@ -22,6 +22,7 @@ from parallel_agents.desktop._qt import (
 )
 from parallel_agents.desktop.pages._base import Page
 from parallel_agents.desktop.services.engine import EngineService
+from parallel_agents.desktop.services.workers import AsyncJob
 from parallel_agents.desktop.widgets.artifact_viewer import ArtifactViewer
 from parallel_agents.project_office import office_dir
 
@@ -33,6 +34,7 @@ class ApprovalsPage(Page):
             subtitle="Review pending writes before they touch GitHub or the repository.",
         )
         self.engine = engine
+        self._job: AsyncJob | None = None
 
         refresh_row = QHBoxLayout()
         refresh_btn = QPushButton("Refresh")
@@ -480,8 +482,6 @@ class ApprovalsPage(Page):
         return None
 
     def _apply_selected_plan(self) -> None:
-        from parallel_agents.desktop.widgets.error_dialog import show_error
-
         entry = self._selected_entry()
         if entry is None:
             QMessageBox.information(
@@ -499,6 +499,12 @@ class ApprovalsPage(Page):
             QMessageBox.warning(self, "Missing run", "Selected approval has no run_id.")
             return
 
+        if self._job is not None and self._job.isRunning():
+            QMessageBox.information(
+                self, "Apply running", "An apply is already running. Wait for it to finish."
+            )
+            return
+
         mode_choice = QMessageBox.question(
             self,
             "Apply plan",
@@ -511,12 +517,18 @@ class ApprovalsPage(Page):
         if mode_choice == QMessageBox.StandardButton.Cancel:
             return
         dry_run = mode_choice != QMessageBox.StandardButton.Yes
-        try:
-            result = self.engine.apply_issue_plan(run_id, dry_run=dry_run)
-        except Exception as exc:  # noqa: BLE001
-            show_error(self, "Apply failed", str(exc), details=repr(exc))
-            return
 
+        self.apply_btn.setEnabled(False)
+        self.apply_btn.setText("Applying...")
+        self._job = AsyncJob(
+            lambda: self.engine.apply_issue_plan_async(run_id, dry_run=dry_run)
+        )
+        self._job.finished_ok.connect(self._on_apply_finished)
+        self._job.failed.connect(self._on_apply_failed)
+        self._job.start()
+
+    def _on_apply_finished(self, result) -> None:
+        self.apply_btn.setText("Apply Plan")
         mode = str(result.get("mode", "dry-run"))
         created = sum(1 for issue in result.get("issues", []) if issue.get("created"))
         planned = int(result.get("issues_planned", 0) or 0)
@@ -526,6 +538,18 @@ class ApprovalsPage(Page):
             f"Mode: {mode}\nCreated issues: {created}/{planned}",
         )
         self._refresh()
+
+    def _on_apply_failed(self, error: str) -> None:
+        from parallel_agents.desktop.widgets.error_dialog import show_error
+
+        self.apply_btn.setText("Apply Plan")
+        self.apply_btn.setEnabled(True)
+        show_error(
+            self,
+            "Apply failed",
+            "The GitHub apply could not complete. See details for the full error.",
+            details=error,
+        )
 
 
 def _read_artifact_for_compare(path: Path) -> str:

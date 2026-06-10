@@ -4,8 +4,10 @@ from parallel_agents.desktop._qt import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QStackedWidget,
     QStatusBar,
+    QThread,
     QWidget,
 )
 from parallel_agents.desktop.pages.approvals_page import ApprovalsPage
@@ -136,3 +138,38 @@ class MainWindow(QMainWindow):
         focus = getattr(artifacts, "focus_artifact", None)
         if callable(focus):
             focus(run_id, path)
+
+    # -- shutdown -------------------------------------------------------
+
+    def _running_jobs(self) -> list[QThread]:
+        jobs: list[QThread] = []
+        for page in self.pages.values():
+            for attr in ("_job", "_auth_job"):
+                job = getattr(page, attr, None)
+                if isinstance(job, QThread) and job.isRunning():
+                    jobs.append(job)
+        return jobs
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        jobs = self._running_jobs()
+        if jobs:
+            confirm = QMessageBox.question(
+                self,
+                "Jobs still running",
+                "A step is still running (possibly a GitHub write).\n"
+                "Closing now may leave it half-finished. Close anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            for job in jobs:
+                job.requestInterruption()
+            for job in jobs:
+                # Give threads a chance to finish; force-stop as a last resort
+                # so Qt does not abort with "Destroyed while thread is running".
+                if not job.wait(5000):
+                    job.terminate()
+                    job.wait(2000)
+        event.accept()

@@ -38,6 +38,9 @@ Break the work into subtasks categorized by specialist area:
 - code: actual implementation or refactoring
 - review: code style, best practices
 
+Assign at most ONE subtask per specialist worker. If a worker has several
+concerns, merge them into a single subtask description for that worker.
+
 Output ONLY valid JSON matching this schema:
 {
   "summary": "brief description of the task and approach",
@@ -110,7 +113,7 @@ async def run_planner(task_input: TaskInput, config: PipelineConfig) -> TaskPlan
         _merge_token_usage(token_usage, attempt_usage)
 
         plan = _parse_plan(raw_text, task_input)
-        if not _is_parse_failure(plan):
+        if not is_parse_failure(plan):
             parse_retries_used = attempt
             break
         parse_retries_used = attempt + 1
@@ -122,6 +125,7 @@ async def run_planner(task_input: TaskInput, config: PipelineConfig) -> TaskPlan
         "total_cost_usd": total_cost,
         "token_usage": token_usage,
         "parse_retries_used": parse_retries_used,
+        "parse_failed": is_parse_failure(plan),
     })
     return plan
 
@@ -162,7 +166,10 @@ def _merge_token_usage(total: dict[str, int], usage: dict[str, int]) -> None:
         total[key] = total.get(key, 0) + value
 
 
-def _is_parse_failure(plan: TaskPlan) -> bool:
+def is_parse_failure(plan: TaskPlan) -> bool:
+    """True when the plan is the sentinel produced after all parse retries failed."""
+    if plan.global_context.get("planner_metrics", {}).get("parse_failed"):
+        return True
     return plan.summary == "Failed to parse planner output" or plan.summary.startswith(
         "Planner output parse error:"
     )

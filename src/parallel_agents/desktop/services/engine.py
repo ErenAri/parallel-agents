@@ -468,9 +468,16 @@ class EngineService:
         )
 
     def apply_issue_plan(self, run_id: str, *, dry_run: bool = True) -> dict[str, Any]:
-        """Apply an issue plan to GitHub. Live writes require `gh` to be authenticated."""
+        """Sync wrapper for headless/CLI callers. UI code must use
+        apply_issue_plan_async via AsyncJob (this raises inside a running loop)."""
         import asyncio
 
+        return asyncio.run(self.apply_issue_plan_async(run_id, dry_run=dry_run))
+
+    async def apply_issue_plan_async(
+        self, run_id: str, *, dry_run: bool = True
+    ) -> dict[str, Any]:
+        """Apply an issue plan to GitHub. Live writes require `gh` to be authenticated."""
         from parallel_agents.tools.github_apply import execute_company_issue_plan
         from parallel_agents.tools.github_tools import parse_repo_ref
 
@@ -496,14 +503,12 @@ class EngineService:
         owner, repo = parsed
 
         issues = plan_payload.get("issues", [])
-        result = asyncio.run(
-            execute_company_issue_plan(
-                owner=owner,
-                repo=repo,
-                issue_plan=issues,
-                create_milestones=True,
-                dry_run=dry_run,
-            )
+        result = await execute_company_issue_plan(
+            owner=owner,
+            repo=repo,
+            issue_plan=issues,
+            create_milestones=True,
+            dry_run=dry_run,
         )
         result["run_id"] = run_id
         result["mode"] = "dry-run" if dry_run else "live"
@@ -536,8 +541,31 @@ class EngineService:
         title: str | None = None,
         draft: bool = True,
     ) -> PullRequestResult:
+        """Sync wrapper for headless/CLI callers. UI code must use
+        create_pull_request_async via AsyncJob (this raises inside a running loop)."""
         import asyncio
 
+        return asyncio.run(
+            self.create_pull_request_async(
+                run_id,
+                repo_ref=repo_ref,
+                head=head,
+                base=base,
+                title=title,
+                draft=draft,
+            )
+        )
+
+    async def create_pull_request_async(
+        self,
+        run_id: str,
+        *,
+        repo_ref: str,
+        head: str,
+        base: str = "main",
+        title: str | None = None,
+        draft: bool = True,
+    ) -> PullRequestResult:
         from parallel_agents.tools.github_tools import create_pr, parse_repo_ref
 
         root = self.require_project()
@@ -557,16 +585,14 @@ class EngineService:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(summary_markdown, encoding="utf-8")
 
-        pr_url = asyncio.run(
-            create_pr(
-                owner,
-                repo,
-                resolved_title,
-                summary_markdown,
-                head=clean_head,
-                base=clean_base,
-                draft=draft,
-            )
+        pr_url = await create_pr(
+            owner,
+            repo,
+            resolved_title,
+            summary_markdown,
+            head=clean_head,
+            base=clean_base,
+            draft=draft,
         )
         if not pr_url:
             raise RuntimeError(
@@ -620,6 +646,7 @@ class EngineService:
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=15,
             )
         except FileNotFoundError:
             return GitHubAuthStatus(

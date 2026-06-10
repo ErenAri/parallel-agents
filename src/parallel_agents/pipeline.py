@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from parallel_agents.agents.judge import run_judge
-from parallel_agents.agents.planner import run_planner
+from parallel_agents.agents.planner import is_parse_failure, run_planner
 from parallel_agents.agents.splitter import split_tasks
 from parallel_agents.config import PipelineConfig
 from parallel_agents.cost_tracker import PipelineCostTracker
@@ -94,7 +94,26 @@ class Pipeline:
         )
         manifest = RunManifest(run_id=run_id, input=task_input)
         store.save_manifest(manifest)
+        try:
+            return await self._run_phases(task_input, run_id, store, manifest, on_status)
+        except Exception:
+            # Persist FAILED so a crashed run is distinguishable from one
+            # still in flight when reading the evidence store later.
+            manifest.status = TaskStatus.FAILED
+            try:
+                store.save_manifest(manifest)
+            except Exception:
+                logger.exception("Could not persist FAILED status for run %s", run_id)
+            raise
 
+    async def _run_phases(
+        self,
+        task_input: TaskInput,
+        run_id: str,
+        store: BaseEvidenceStore,
+        manifest: RunManifest,
+        on_status: Callable[[str], None] | None,
+    ) -> FinalOutput:
         def _update_status(msg: str) -> None:
             logger.info(msg)
             if on_status:
@@ -156,6 +175,18 @@ class Pipeline:
         )
 
         if not plan.subtasks:
+            if is_parse_failure(plan):
+                _update_status("Planner output failed to parse after retries. Marking run failed.")
+                manifest.status = TaskStatus.FAILED
+                store.save_manifest(manifest)
+                return FinalOutput(
+                    summary="Planner failed to parse output after retries",
+                    metadata={
+                        "run_id": run_id,
+                        "plan_summary": plan.summary,
+                        "error": "planner_parse_failure",
+                    },
+                )
             _update_status("Planner produced no subtasks. Returning empty result.")
             manifest.status = TaskStatus.COMPLETED
             store.save_manifest(manifest)
@@ -195,7 +226,12 @@ class Pipeline:
             batch_results = await self._run_batch(batch, plan, semaphore, store)
 
             for result in batch_results:
-                all_results[result.worker_name] = result
+                # Key by worker name for the common one-subtask-per-worker case,
+                # but never silently overwrite a second subtask's result.
+                result_key = result.worker_name
+                if result_key in all_results:
+                    result_key = f"{result.worker_name}:{result.subtask_id}"
+                all_results[result_key] = result
                 store.save_worker_result(result)
 
                 # Track cost
