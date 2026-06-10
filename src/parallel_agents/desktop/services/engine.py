@@ -7,6 +7,7 @@ in-process calls for HTTP-to-gateway later without touching widgets.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -69,6 +70,7 @@ class BriefResult:
     run_id: str
     artifact_path: Path
     approval_path: Path
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -77,6 +79,7 @@ class ArtifactResult:
     artifact: str
     artifact_path: Path
     approval_path: Path
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -365,7 +368,7 @@ class EngineService:
     def create_brief(self, idea: str, title: str | None = None) -> BriefResult:
         root = self.require_project()
         run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-        brief = self._build_brief(idea, title=title)
+        brief, provenance = self._build_brief(idea, title=title)
         result = self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="brief",
@@ -373,17 +376,19 @@ class EngineService:
             title=brief.title,
             summary=brief.problem_statement,
             root=root,
+            provenance=provenance,
         )
         return BriefResult(
             run_id=run_id,
             artifact_path=result.artifact_path,
             approval_path=result.approval_path,
+            provenance=provenance,
         )
 
     def create_prfaq(self, run_id: str) -> ArtifactResult:
         root = self.require_project()
         brief = self._load_brief(run_id)
-        prfaq = self._build_prfaq(brief)
+        prfaq, provenance = self._build_prfaq(brief)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="prfaq",
@@ -391,12 +396,13 @@ class EngineService:
             title=prfaq.headline,
             summary=prfaq.press_release_summary,
             root=root,
+            provenance=provenance,
         )
 
     def create_roadmap(self, run_id: str, horizon_weeks: int = 12) -> ArtifactResult:
         root = self.require_project()
         brief = self._load_brief(run_id)
-        roadmap = build_roadmap(brief, horizon_weeks=horizon_weeks)
+        roadmap, provenance = self._build_roadmap(brief, horizon_weeks)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="roadmap",
@@ -404,11 +410,13 @@ class EngineService:
             title=roadmap.name,
             summary=f"{len(roadmap.items)} items across {roadmap.horizon_weeks} weeks",
             root=root,
+            provenance=provenance,
         )
 
     def create_tech_stack(self, run_id: str, repo_path: str | Path) -> ArtifactResult:
         root = self.require_project()
-        stack = recommend_tech_stack(repo_path)
+        brief = self._load_brief(run_id)
+        stack, provenance = self._build_tech_stack(brief, repo_path)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="tech-stack",
@@ -416,13 +424,14 @@ class EngineService:
             title=stack.recommended_option,
             summary=stack.rationale,
             root=root,
+            provenance=provenance,
         )
 
     def create_rfc(self, run_id: str) -> ArtifactResult:
         root = self.require_project()
         brief = self._load_brief(run_id)
         stack = self._load_artifact(run_id, "tech-stack", TechStackDecision)
-        rfc = self._build_rfc(brief, stack)
+        rfc, provenance = self._build_rfc(brief, stack)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="rfc",
@@ -430,12 +439,13 @@ class EngineService:
             title=rfc.title,
             summary=rfc.decision,
             root=root,
+            provenance=provenance,
         )
 
     def create_sprint(self, run_id: str, milestone: str) -> ArtifactResult:
         root = self.require_project()
         roadmap = self._load_artifact(run_id, "roadmap", RoadmapPlan)
-        sprint = build_sprint_plan(roadmap, milestone=milestone)
+        sprint, provenance = self._build_sprint(roadmap, milestone)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="sprint",
@@ -443,6 +453,7 @@ class EngineService:
             title=sprint.name,
             summary=f"{len(sprint.items)} items, milestone {sprint.milestone}",
             root=root,
+            provenance=provenance,
         )
 
     # -- github plan / apply (slice 2) ---------------------------------
@@ -1068,41 +1079,73 @@ class EngineService:
 
     # -- LLM-backed generation (with deterministic fallback) -----------
 
-    def _build_brief(self, idea: str, *, title: str | None) -> ProductBrief:
-        import os
-
-        if not _truthy(os.environ.get("PA_DESKTOP_LLM_BRIEF")):
+    def _build_brief(self, idea: str, *, title: str | None):
+        def _fallback():
             return create_product_brief(idea, title=title)
-        try:
+
+        def _llm():
             from parallel_agents.desktop.services.llm_brief import generate_llm_brief
 
             return generate_llm_brief(idea, title=title)
-        except Exception:
-            return create_product_brief(idea, title=title)
+
+        return _generate_with_provenance("BRIEF", _llm, _fallback)
 
     def _build_prfaq(self, brief: ProductBrief):
-        import os
-
-        if not _truthy(os.environ.get("PA_DESKTOP_LLM_PRFAQ")):
+        def _fallback():
             return build_prfaq(brief)
-        try:
+
+        def _llm():
             from parallel_agents.desktop.services.llm_prfaq import generate_llm_prfaq
 
             return generate_llm_prfaq(brief)
-        except Exception:
-            return build_prfaq(brief)
+
+        return _generate_with_provenance("PRFAQ", _llm, _fallback)
+
+    def _build_tech_stack(self, brief: ProductBrief, repo_path: str | Path):
+        def _fallback():
+            return recommend_tech_stack(repo_path)
+
+        def _llm():
+            from parallel_agents.desktop.services.llm_tech_stack import (
+                generate_llm_tech_stack,
+            )
+
+            return generate_llm_tech_stack(brief, repo_path)
+
+        return _generate_with_provenance("TECH_STACK", _llm, _fallback)
 
     def _build_rfc(self, brief: ProductBrief, stack: TechStackDecision):
-        import os
-
-        if not _truthy(os.environ.get("PA_DESKTOP_LLM_RFC")):
+        def _fallback():
             return build_architecture_rfc(brief, stack)
-        try:
+
+        def _llm():
             from parallel_agents.desktop.services.llm_rfc import generate_llm_rfc
 
             return generate_llm_rfc(brief, stack)
-        except Exception:
-            return build_architecture_rfc(brief, stack)
+
+        return _generate_with_provenance("RFC", _llm, _fallback)
+
+    def _build_roadmap(self, brief: ProductBrief, horizon_weeks: int):
+        def _fallback():
+            return build_roadmap(brief, horizon_weeks=horizon_weeks)
+
+        def _llm():
+            from parallel_agents.desktop.services.llm_roadmap import generate_llm_roadmap
+
+            return generate_llm_roadmap(brief, horizon_weeks=horizon_weeks)
+
+        return _generate_with_provenance("ROADMAP", _llm, _fallback)
+
+    def _build_sprint(self, roadmap: RoadmapPlan, milestone: str):
+        def _fallback():
+            return build_sprint_plan(roadmap, milestone=milestone)
+
+        def _llm():
+            from parallel_agents.desktop.services.llm_sprint import generate_llm_sprint
+
+            return generate_llm_sprint(roadmap, milestone=milestone)
+
+        return _generate_with_provenance("SPRINT", _llm, _fallback)
 
     def _persist_artifact_with_approval(
         self,
@@ -1113,15 +1156,14 @@ class EngineService:
         title: str,
         summary: str,
         root: Path,
+        provenance: dict[str, Any] | None = None,
     ) -> ArtifactResult:
         output_dir = office_output_dir(root)
         artifact_path = persist_company_artifact(output_dir, run_id, artifact, payload)
-        append_company_artifact_event(
-            output_dir,
-            run_id,
-            artifact,
-            {"event": "created", "source": "desktop", "title": title},
-        )
+        event: dict[str, Any] = {"event": "created", "source": "desktop", "title": title}
+        if provenance:
+            event["provenance"] = provenance
+        append_company_artifact_event(output_dir, run_id, artifact, event)
         approval_path = self._create_pending_approval(
             run_id=run_id,
             artifact=artifact,
@@ -1134,6 +1176,7 @@ class EngineService:
             artifact=artifact,
             artifact_path=artifact_path,
             approval_path=approval_path,
+            provenance=provenance or {},
         )
 
     # -- runs / artifacts ----------------------------------------------
@@ -1554,6 +1597,33 @@ def _iso_now() -> str:
 
 def _truthy(value: str | None) -> bool:
     return bool(value) and value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _generate_with_provenance(artifact_key: str, llm_fn, fallback_fn):
+    """Run the LLM generator when enabled, else the deterministic builder.
+
+    Returns ``(artifact, provenance)`` where provenance records whether the LLM
+    or the template produced it (and the model / failure reason). LLM failures
+    are logged and degrade to the template — never silently swallowed.
+    """
+    from parallel_agents.desktop.services import llm_config
+
+    if not llm_config.llm_enabled(artifact_key):
+        reason = "disabled" if llm_config.llm_available() else "no-api-key"
+        return fallback_fn(), {"generator": "template", "reason": reason}
+    try:
+        artifact, model = llm_fn()
+        return artifact, {"generator": "llm", "model": model}
+    except Exception as exc:  # noqa: BLE001 - any LLM failure falls back
+        logging.getLogger("parallel_agents.desktop.engine").warning(
+            "LLM generation for %s failed (%s); using deterministic fallback.",
+            artifact_key,
+            exc,
+        )
+        return fallback_fn(), {
+            "generator": "template",
+            "reason": f"llm-error: {type(exc).__name__}",
+        }
 
 
 def _metric_delta(candidate: float | None, baseline: float | None) -> float | None:

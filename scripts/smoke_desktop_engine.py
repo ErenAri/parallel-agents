@@ -17,6 +17,8 @@ from pathlib import Path
 
 def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    # Keep the smoke test hermetic: no live LLM calls regardless of environment.
+    os.environ.pop("ANTHROPIC_API_KEY", None)
     from parallel_agents.desktop.services.engine import EngineService
 
     # --- Slice 1+2: full pipeline ---

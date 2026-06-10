@@ -24,6 +24,17 @@ from parallel_agents.desktop.services.history import HistoryStore
 from parallel_agents.desktop.services.workers import AsyncJob
 
 
+def _done_label(result) -> str:
+    """Surface provenance on the card status: model name or 'template'."""
+    provenance = getattr(result, "provenance", None) or {}
+    if provenance.get("generator") == "llm":
+        model = str(provenance.get("model", "")).strip()
+        return f"done ({model})" if model else "done (llm)"
+    if provenance.get("generator") == "template":
+        return "done (template)"
+    return "done"
+
+
 def _editable_combo(items: list[str], placeholder: str) -> QComboBox:
     combo = QComboBox()
     combo.setEditable(True)
@@ -418,14 +429,14 @@ class CompanyPage(Page):
 
     def _on_brief_done(self, result) -> None:
         self._run_id = result.run_id
-        self.brief_card.set_status("done", "WorkerStatusDone")
+        self.brief_card.set_status(_done_label(result), "WorkerStatusDone")
         self.brief_card.button.setEnabled(True)
         self.run_banner.setText(f"Current run: {result.run_id}")
         self.artifact_created.emit(result.run_id, result.artifact_path)
         self._refresh_state()
 
     def _on_artifact_done(self, card, result) -> None:
-        card.set_status("done", "WorkerStatusDone")
+        card.set_status(_done_label(result), "WorkerStatusDone")
         card.button.setEnabled(True)
         self.artifact_created.emit(result.run_id, result.artifact_path)
         self._refresh_state()

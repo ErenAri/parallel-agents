@@ -86,15 +86,30 @@ def main() -> int:
             assert key not in os.environ
         print("malformed file ignored cleanly: ok")
 
-    # --- 4. status bar LLM indicator ---
+    # --- 4. status bar LLM indicator (default-on policy) ---
     for key in KNOWN_KEYS:
         os.environ.pop(key, None)
+    os.environ.pop("ANTHROPIC_API_KEY", None)
     from parallel_agents.desktop.services.status import llm_indicator_text
 
+    # no key, no flags -> deterministic
     assert llm_indicator_text() == "LLM: deterministic"
+
+    # explicit per-artifact flags win even without a key
     os.environ["PA_DESKTOP_LLM_BRIEF"] = "1"
     os.environ["PA_DESKTOP_LLM_RFC"] = "1"
     assert llm_indicator_text() == "LLM: brief, rfc"
+    os.environ.pop("PA_DESKTOP_LLM_BRIEF", None)
+    os.environ.pop("PA_DESKTOP_LLM_RFC", None)
+
+    # a key present -> default-on for every artifact
+    os.environ["ANTHROPIC_API_KEY"] = "sk-test-not-real"
+    assert llm_indicator_text() == "LLM: all"
+    # global disable flag overrides the key
+    os.environ["PA_DESKTOP_LLM"] = "0"
+    assert llm_indicator_text() == "LLM: deterministic"
+    os.environ.pop("PA_DESKTOP_LLM", None)
+    os.environ.pop("ANTHROPIC_API_KEY", None)
     print(f"LLM indicator text: {llm_indicator_text()}")
 
     # --- 5. history store: round-trip, de-dup, cap, malformed file ---
