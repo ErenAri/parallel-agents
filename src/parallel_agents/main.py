@@ -3105,6 +3105,82 @@ def office_home(project_path: Path, json_output: bool) -> None:
     console.print(memory_table)
 
 
+@office_group.command(name="audit-verify")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option("--run-id", default=None, help="Optional run id. If omitted, verify every run.")
+@click.option("--json-output/--no-json-output", default=False, help="Print the verification report as JSON.")
+def office_audit_verify(project_path: Path, run_id: str | None, json_output: bool) -> None:
+    """Recompute the workspace audit hash-chains and report any tampering.
+
+    Exits non-zero if any chain is broken, so CI/release checks can gate on it.
+    """
+    from parallel_agents.company_artifacts import (
+        verify_hash_chain,
+        verify_run_audit_chains,
+    )
+    from parallel_agents.project_office import office_dir, office_output_dir
+
+    _resolve_initialized_office(project_path)
+    central = verify_hash_chain(
+        office_dir(project_path) / "audit" / "events.jsonl", "governance-log"
+    )
+    target_runs = [run_id] if run_id else list_office_run_ids(project_path)
+    try:
+        run_reports = [
+            verify_run_audit_chains(office_output_dir(project_path), rid)
+            for rid in target_runs
+        ]
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+    all_ok = central.ok and all(r.ok for r in run_reports)
+
+    if json_output:
+        click.echo(
+            json.dumps(
+                {
+                    "ok": all_ok,
+                    "governance_log": {"ok": central.ok, "entries": central.entry_count, "reason": central.reason},
+                    "runs": [
+                        {
+                            "run_id": r.run_id,
+                            "ok": r.ok,
+                            "chains": [
+                                {"artifact": c.artifact_name, "ok": c.ok, "entries": c.entry_count, "reason": c.reason}
+                                for c in r.chains
+                            ],
+                        }
+                        for r in run_reports
+                    ],
+                },
+                indent=2,
+            )
+        )
+    else:
+        table = Table(title="Audit Chain Verification")
+        table.add_column("Scope")
+        table.add_column("Status")
+        table.add_column("Entries", justify="right")
+        gov_status = "OK" if central.ok else f"BROKEN ({central.reason})"
+        table.add_row("governance-log", gov_status, str(central.entry_count))
+        for r in run_reports:
+            for c in r.chains:
+                status = "OK" if c.ok else f"BROKEN ({c.reason})"
+                table.add_row(f"{r.run_id}/{c.artifact_name}", status, str(c.entry_count))
+        console.print(table)
+        console.print(f"\nOverall: {'OK' if all_ok else 'TAMPERING DETECTED'}")
+
+    if not all_ok:
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+
 @office_group.command(name="artifacts")
 @click.option(
     "--project",

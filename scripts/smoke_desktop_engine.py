@@ -64,13 +64,22 @@ def main() -> int:
         assert all("status" in i for i in result["issues"])
 
         audit = Path(info.office_dir) / "audit" / "events.jsonl"
-        events = [
+        entries = [
             json.loads(line)
             for line in audit.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        applied = [e for e in events if e.get("event") == "issue-plan.apply"]
+        # events.jsonl is now hash-chained: the event fields live under "payload".
+        payloads = [e["payload"] for e in entries]
+        applied = [p for p in payloads if p.get("event") == "issue-plan.apply"]
         assert len(applied) == 1 and applied[0]["mode"] == "dry-run"
+
+        # the governance log verifies as an intact hash chain
+        from parallel_agents.company_artifacts import verify_hash_chain
+
+        chain = verify_hash_chain(audit, "governance-log")
+        assert chain.ok, f"governance chain broken: {chain.reason}"
+        print(f"governance chain verified: {chain.entry_count} entries")
 
     # --- FU-1: LLM-flag fallback for brief, PRFAQ, RFC ---
     # All three flags on, no API key -> all three must fall back deterministically.

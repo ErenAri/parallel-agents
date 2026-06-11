@@ -84,7 +84,8 @@ def test_run_pipeline_persists_final_output_and_audit(tmp_path, monkeypatch):
     assert audit_path.exists()
     lines = [line for line in audit_path.read_text(encoding="utf-8").splitlines() if line]
     assert lines, "expected at least one audit event"
-    latest = json.loads(lines[-1])
+    # events.jsonl is hash-chained: the event fields live under "payload".
+    latest = json.loads(lines[-1])["payload"]
     assert latest["run_id"] == "run-test-001"
     assert latest["event"] == "run.execute"
 

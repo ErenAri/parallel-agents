@@ -496,7 +496,8 @@ class EngineService:
         approval = self._find_approval(run_id, artifact="issue-plan")
         if approval is None:
             raise FileNotFoundError("No issue-plan approval found for this run.")
-        if approval["data"].get("status") != "approved":
+        approval_data = approval["data"]
+        if approval_data.get("status") != "approved":
             raise PermissionError(
                 "Issue plan must be approved before apply. "
                 "Approve it on the Approvals page first."
@@ -505,7 +506,28 @@ class EngineService:
         plan_path = office_output_dir(root) / run_id / "company" / "issue-plan.json"
         if not plan_path.exists():
             raise FileNotFoundError(f"Issue-plan artifact missing: {plan_path}")
-        plan_payload = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        # Bind the approval to the exact bytes that were approved: if the plan was
+        # regenerated or edited after approval, the digests differ and apply is
+        # refused (closes the approve-then-swap TOCTOU window). Read the bytes
+        # exactly once and parse that same buffer, so the verified bytes ARE the
+        # applied bytes (no second read that an attacker could swap in between).
+        approved_digest = approval_data.get("artifact_sha256")
+        if not approved_digest:
+            raise PermissionError(
+                "Approval has no bound artifact digest (legacy or missing-file "
+                "approval); re-approve the issue plan before applying."
+            )
+        import hashlib
+
+        raw = plan_path.read_bytes()
+        current_digest = hashlib.sha256(raw).hexdigest()
+        if current_digest != approved_digest:
+            raise PermissionError(
+                "Issue plan changed since approval; re-approve before applying."
+            )
+
+        plan_payload = json.loads(raw.decode("utf-8"))
 
         repo_ref = plan_payload.get("repo", "")
         parsed = parse_repo_ref(str(repo_ref))
@@ -1238,11 +1260,33 @@ class EngineService:
         approvals_dir.mkdir(parents=True, exist_ok=True)
         approval_id = f"{run_id}-{artifact}"
         path = approvals_dir / f"{approval_id}.json"
+
+        # If a decision already existed for this artifact (regeneration), record
+        # an explicit supersede event rather than silently voiding the decision.
+        if path.exists():
+            try:
+                prior = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                prior = {}
+            if prior.get("status") in {"approved", "rejected"}:
+                self._write_audit(
+                    run_id,
+                    {
+                        "event": "approval.superseded",
+                        "approval_id": approval_id,
+                        "artifact": artifact,
+                        "previous_status": prior.get("status"),
+                        "previous_decided_by": prior.get("decided_by"),
+                    },
+                )
+
+        artifact_sha256 = self._artifact_digest(root, artifact_relpath)
         payload = {
             "approval_id": approval_id,
             "run_id": run_id,
             "artifact": artifact,
             "artifact_path": artifact_relpath,
+            "artifact_sha256": artifact_sha256,
             "title": title,
             "summary": summary,
             "status": "pending",
@@ -1251,9 +1295,23 @@ class EngineService:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         self._write_audit(
             run_id,
-            {"event": "approval.created", "approval_id": approval_id, "artifact": artifact},
+            {
+                "event": "approval.created",
+                "approval_id": approval_id,
+                "artifact": artifact,
+                "artifact_sha256": artifact_sha256,
+            },
         )
         return path
+
+    @staticmethod
+    def _artifact_digest(root: Path, artifact_relpath: str) -> str | None:
+        import hashlib
+
+        path = office_dir(root) / artifact_relpath
+        if not path.exists():
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _decide_approval(
         self, approval_path: Path, *, decision: str, actor: str, message: str
@@ -1321,9 +1379,16 @@ class EngineService:
             if not line.strip():
                 continue
             try:
-                payload = json.loads(line)
+                entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            # Hash-chained entries wrap the event under "payload"; flatten it so
+            # callers see the same top-level fields (run_id, event, ...) as before.
+            inner = entry.get("payload")
+            if isinstance(inner, dict):
+                payload = {"timestamp": entry.get("timestamp"), **inner}
+            else:
+                payload = entry  # tolerate any legacy unchained lines
             if run_id and str(payload.get("run_id", "")) != run_id:
                 continue
             if approval_id and str(payload.get("approval_id", "")) != approval_id:
@@ -1334,13 +1399,64 @@ class EngineService:
         return events
 
     def _write_audit(self, run_id: str, event: dict[str, Any]) -> None:
+        """Append a governance event to the workspace-wide, hash-chained log.
+
+        Approval/apply/PR/run events are the governance-relevant ones; chaining
+        them here makes the 'tamper-evident audit' claim true for them (they were
+        previously written as plain, unchained JSONL).
+        """
+        from parallel_agents.company_artifacts import append_hash_chained_line
+
         root = self.require_project()
-        audit_dir = office_dir(root) / "audit"
-        audit_dir.mkdir(parents=True, exist_ok=True)
-        record = {"timestamp": _iso_now(), "run_id": run_id, **event}
-        with (audit_dir / "events.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record))
-            fh.write("\n")
+        log_path = office_dir(root) / "audit" / "events.jsonl"
+        append_hash_chained_line(log_path, {"run_id": run_id, **event})
+
+    def verify_audit_chains(self, run_id: str | None = None) -> dict[str, Any]:
+        """Recompute the governance log and per-run artifact chains.
+
+        Returns a structured report; ``ok`` is True only if every chain verifies.
+        """
+        from parallel_agents.company_artifacts import (
+            verify_hash_chain,
+            verify_run_audit_chains,
+        )
+
+        root = self.require_project()
+        central = verify_hash_chain(
+            office_dir(root) / "audit" / "events.jsonl", "governance-log"
+        )
+        run_ids = [run_id] if run_id else [r["id"] for r in self.list_runs()]
+        runs: list[dict[str, Any]] = []
+        all_ok = central.ok
+        for rid in run_ids:
+            rv = verify_run_audit_chains(office_output_dir(root), rid)
+            all_ok = all_ok and rv.ok
+            runs.append(
+                {
+                    "run_id": rid,
+                    "ok": rv.ok,
+                    "chains": [
+                        {
+                            "artifact": c.artifact_name,
+                            "ok": c.ok,
+                            "entries": c.entry_count,
+                            "reason": c.reason,
+                            "broken_index": c.broken_index,
+                        }
+                        for c in rv.chains
+                    ],
+                }
+            )
+        return {
+            "ok": all_ok,
+            "governance_log": {
+                "ok": central.ok,
+                "entries": central.entry_count,
+                "reason": central.reason,
+                "broken_index": central.broken_index,
+            },
+            "runs": runs,
+        }
 
     @staticmethod
     def _git_current_branch(root: Path) -> str | None:
