@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from parallel_agents.config import PipelineConfig, WorkerConfig
+from parallel_agents.config import (
+    DEFAULT_ARTIFACT_DIR,
+    LEGACY_ARTIFACT_DIR,
+    PipelineConfig,
+    WorkerConfig,
+    migrate_legacy_artifact_dir,
+)
 
 
 class TestWorkerConfig:
@@ -56,3 +62,37 @@ class TestPipelineConfig:
     def test_store_backend_option(self):
         config = PipelineConfig(store_backend="sqlite")
         assert config.store_backend == "sqlite"
+
+    def test_output_dir_defaults_to_unified_root(self):
+        config = PipelineConfig()
+        assert config.output_dir == DEFAULT_ARTIFACT_DIR == ".parallel-agents"
+
+
+class TestMigrateLegacyArtifactDir:
+    def test_no_legacy_dir_is_noop(self, tmp_path):
+        result = migrate_legacy_artifact_dir(tmp_path)
+        assert result["migrated"] is False
+        assert result["reason"] == "no-legacy-dir"
+
+    def test_renames_legacy_onto_unified_root(self, tmp_path):
+        legacy = tmp_path / LEGACY_ARTIFACT_DIR
+        legacy.mkdir()
+        (legacy / "marker.txt").write_text("keep me", encoding="utf-8")
+
+        result = migrate_legacy_artifact_dir(tmp_path)
+        assert result["migrated"] is True
+        target = tmp_path / DEFAULT_ARTIFACT_DIR
+        assert target.exists()
+        assert (target / "marker.txt").read_text(encoding="utf-8") == "keep me"
+        assert not legacy.exists()
+
+    def test_refuses_when_target_exists(self, tmp_path):
+        (tmp_path / LEGACY_ARTIFACT_DIR).mkdir()
+        (tmp_path / DEFAULT_ARTIFACT_DIR).mkdir()
+
+        result = migrate_legacy_artifact_dir(tmp_path)
+        assert result["migrated"] is False
+        assert result["reason"] == "target-exists"
+        # never merges or overwrites: both dirs remain untouched
+        assert (tmp_path / LEGACY_ARTIFACT_DIR).exists()
+        assert (tmp_path / DEFAULT_ARTIFACT_DIR).exists()

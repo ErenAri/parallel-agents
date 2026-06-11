@@ -148,6 +148,7 @@ def test_gateway_company_idea_roadmap_plan_lifecycle(tmp_path):
 
 
 def test_gateway_approval_events_and_apply_success(tmp_path, monkeypatch):
+    monkeypatch.setenv("PA_ALLOW_WRITE_TOOLS", "1")
     app = create_gateway_app(tmp_path)
     client = TestClient(app)
     roadmap = build_roadmap(create_product_brief("Build approval flow")).model_dump(mode="json")
@@ -179,7 +180,8 @@ def test_gateway_approval_events_and_apply_success(tmp_path, monkeypatch):
     assert events["approval_audit_events"][0]["payload"]["approval_note"] == "ok"
 
 
-def test_gateway_apply_waits_for_approval(tmp_path):
+def test_gateway_apply_waits_for_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("PA_ALLOW_WRITE_TOOLS", "1")
     app = create_gateway_app(tmp_path)
     client = TestClient(app)
     roadmap = build_roadmap(create_product_brief("Build approval flow")).model_dump(mode="json")
@@ -190,7 +192,22 @@ def test_gateway_apply_waits_for_approval(tmp_path):
     assert result["error_message"] == "plan is not approved"
 
 
+def test_gateway_apply_disabled_by_default(tmp_path, monkeypatch):
+    # Without PA_ALLOW_WRITE_TOOLS the gateway must refuse the live apply step.
+    monkeypatch.delenv("PA_ALLOW_WRITE_TOOLS", raising=False)
+    app = create_gateway_app(tmp_path)
+    client = TestClient(app)
+    roadmap = build_roadmap(create_product_brief("Build gated flow")).model_dump(mode="json")
+    client.post("/runs/company/plan", json={"run_id": "run-gated", "roadmap": roadmap, "repo": "owner/repo"})
+    client.post("/runs/company/approve", json={"run_id": "run-gated", "approver": "lead"})
+
+    result = client.post("/runs/company/apply", json={"run_id": "run-gated"}).json()
+    assert result["status"] == "blocked_by_policy"
+    assert "PA_ALLOW_WRITE_TOOLS" in result["error_message"]
+
+
 def test_gateway_apply_blocks_policy_before_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("PA_ALLOW_WRITE_TOOLS", "1")
     app = create_gateway_app(tmp_path)
     client = TestClient(app)
     roadmap = build_roadmap(create_product_brief("Build policy flow")).model_dump(mode="json")
@@ -244,6 +261,7 @@ def test_gateway_list_runs_and_jobs_endpoint(tmp_path):
 
 
 def test_gateway_cancel_and_retry_controls(tmp_path, monkeypatch):
+    monkeypatch.setenv("PA_ALLOW_WRITE_TOOLS", "1")
     app = create_gateway_app(tmp_path)
     client = TestClient(app)
 

@@ -24,6 +24,7 @@ from parallel_agents.company_artifacts import (
     load_company_artifact_events,
     persist_company_artifact,
 )
+from parallel_agents.config import DEFAULT_ARTIFACT_DIR
 from parallel_agents.company_policy import (
     CompanyApplyPolicy,
     derive_policy_from_issue_plan,
@@ -34,6 +35,7 @@ from parallel_agents.company_workflows import (
     build_issue_plan_from_roadmap,
     build_roadmap,
     create_product_brief,
+    issue_plan_items,
 )
 from parallel_agents.tools.github_tools import parse_repo_ref
 from parallel_agents.workspace_memory import (
@@ -63,6 +65,18 @@ TERMINAL_RUN_STATUSES = {
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _write_tools_enabled() -> bool:
+    """Whether the gateway may perform external/irreversible writes (apply).
+
+    Off by default: the gateway is a network surface, so live GitHub writes must
+    be explicitly opted into via PA_ALLOW_WRITE_TOOLS. Read, plan, and approve
+    flows are unaffected; only the apply step that mutates a remote is gated.
+    """
+    return os.environ.get("PA_ALLOW_WRITE_TOOLS", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -216,7 +230,7 @@ def _decode_jwt_payload(token: str) -> dict[str, Any] | None:
 
 
 class GatewayStore:
-    def __init__(self, output_dir: str | Path = ".parallel-agents-output") -> None:
+    def __init__(self, output_dir: str | Path = DEFAULT_ARTIFACT_DIR) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.output_dir / "gateway.sqlite"
@@ -839,7 +853,7 @@ class GatewayJobRunner:
 
 
 def create_gateway_app(
-    output_dir: str | Path = ".parallel-agents-output",
+    output_dir: str | Path = DEFAULT_ARTIFACT_DIR,
     api_key: str | None = None,
     jwt_secret: str | None = None,
     jwt_issuer: str | None = None,
@@ -991,6 +1005,12 @@ def create_gateway_app(
         )
 
     def _run_company_apply(run: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
+        if not _write_tools_enabled():
+            return (
+                "blocked_by_policy",
+                {"write_tools_enabled": False},
+                "live writes disabled; set PA_ALLOW_WRITE_TOOLS=1 to enable apply",
+            )
         payload = dict(run.get("payload") or {})
         run_id = str(payload.get("run_id") or run["id"])
         artifact_name_override = payload.get("artifact")
@@ -1010,7 +1030,7 @@ def create_gateway_app(
         if not parsed:
             raise ValueError("artifact repo is invalid or missing")
         owner, repo = parsed
-        issue_plan = artifact.get("issue_plan") or []
+        issue_plan = issue_plan_items(artifact)
 
         policy = derive_policy_from_issue_plan(f"{owner}/{repo}", issue_plan)
         if isinstance(artifact.get("apply_policy"), dict):
@@ -1572,7 +1592,7 @@ def run_gateway_server(
     *,
     host: str = "127.0.0.1",
     port: int = 8733,
-    output_dir: str | Path = ".parallel-agents-output",
+    output_dir: str | Path = DEFAULT_ARTIFACT_DIR,
     api_key: str | None = None,
     jwt_secret: str | None = None,
     jwt_issuer: str | None = None,

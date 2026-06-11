@@ -30,6 +30,7 @@ from parallel_agents.company_workflows import (
     build_roadmap,
     build_sprint_plan,
     create_product_brief,
+    issue_plan_items,
     recommend_tech_stack,
 )
 from parallel_agents.eval_harness import (
@@ -462,10 +463,14 @@ class EngineService:
         root = self.require_project()
         roadmap = self._load_artifact(run_id, "roadmap", RoadmapPlan)
         planned = build_issue_plan_from_roadmap(roadmap)
+        planned_dump = [item.model_dump(mode="json") for item in planned]
         payload = {
             "repo": repo,
             "issue_count": len(planned),
-            "issues": [item.model_dump(mode="json") for item in planned],
+            # Emit both keys so the artifact matches the network surfaces and a
+            # plan made here applies cleanly from the CLI/gateway/MCP too.
+            "issues": planned_dump,
+            "issue_plan": planned_dump,
             "requires_approval": True,
             "approved": False,
         }
@@ -535,7 +540,7 @@ class EngineService:
             raise ValueError(f"Issue-plan repo ref is invalid: {repo_ref!r}")
         owner, repo = parsed
 
-        issues = plan_payload.get("issues", [])
+        issues = issue_plan_items(plan_payload)
         result = await execute_company_issue_plan(
             owner=owner,
             repo=repo,

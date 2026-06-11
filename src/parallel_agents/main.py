@@ -20,7 +20,11 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from parallel_agents.config import PipelineConfig
+from parallel_agents.config import (
+    DEFAULT_ARTIFACT_DIR,
+    PipelineConfig,
+    migrate_legacy_artifact_dir,
+)
 from parallel_agents.eval_harness import (
     EvaluationAnnotationUpdate,
     apply_evaluation_annotations,
@@ -106,6 +110,17 @@ from parallel_agents.tools.github_tools import (
 )
 
 console = Console()
+
+
+def output_dir_option(func):
+    """Shared --output-dir option pinned to the single unified workspace root."""
+    return click.option(
+        "--output-dir",
+        default=DEFAULT_ARTIFACT_DIR,
+        show_default=True,
+        help="Artifact output directory for run-linked data.",
+    )(func)
+
 
 EXIT_SUCCESS = 0
 EXIT_RUNTIME_FAILURE = 1
@@ -1376,7 +1391,7 @@ def company_group() -> None:
     help="Optional output path for generated brief JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_idea(
     idea: str,
@@ -1426,7 +1441,7 @@ def company_idea(
     help="Optional output path for generated PR/FAQ JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_prfaq(
     brief_path: Path,
@@ -1480,7 +1495,7 @@ def company_prfaq(
     help="Optional output path for generated stack decision JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_stack(
     repo: Path,
@@ -1536,7 +1551,7 @@ def company_stack(
     help="Optional output path for generated RFC JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_rfc(
     brief_path: Path,
@@ -1594,7 +1609,7 @@ def company_rfc(
     help="Optional output path for generated roadmap JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_roadmap(
     brief_path: Path,
@@ -1648,7 +1663,7 @@ def company_roadmap(
     help="Optional output path for generated release readiness JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_release_check(
     repo: Path,
@@ -1698,7 +1713,7 @@ def company_release_check(
     help="Optional output path for generated sprint plan JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_sprint(
     roadmap_path: Path,
@@ -1757,7 +1772,7 @@ def company_sprint(
     help="Optional output path for post-release review JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_post_release(
     release_id: str,
@@ -1818,7 +1833,7 @@ def company_post_release(
     help="Optional output path for GitHub workflow templates JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_templates(
     roadmap_path: Path | None,
@@ -1867,7 +1882,7 @@ def company_templates(
 )
 @click.option("--dry-run/--no-dry-run", default=True, show_default=True, help="Preview operations without GitHub writes.")
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print sync result as JSON.")
 def company_sync_labels(
     repo_ref: str,
@@ -1951,7 +1966,7 @@ def company_sync_labels(
 )
 @click.option("--dry-run/--no-dry-run", default=True, show_default=True, help="Preview operations without GitHub writes.")
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print sync result as JSON.")
 def company_sync_milestones(
     repo_ref: str,
@@ -2054,7 +2069,7 @@ def company_branch_name(
     type=click.Path(path_type=Path),
     help="Optional output path for generated PR summary Markdown.",
 )
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
 def company_pr_summary(
     run_id: str,
@@ -2100,7 +2115,7 @@ def company_pr_summary(
     show_default=True,
     help="Artifact to enrich with PR link metadata.",
 )
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
 def company_pr_link(
     run_id: str,
@@ -2163,7 +2178,7 @@ def company_pr_link(
 @click.option("--title", default=None, help="Optional PR title.")
 @click.option("--artifact", "artifact_name", default="issue-plan", show_default=True, help="Artifact to enrich with PR link metadata.")
 @click.option("--draft/--no-draft", default=True, show_default=True, help="Create draft PR.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
 def company_pr_create(
     run_id: str,
@@ -2328,7 +2343,7 @@ def company_pr_create(
     show_default=True,
     help="Which comment payloads to post.",
 )
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
 def company_pr_comment(
     run_id: str,
@@ -2498,7 +2513,7 @@ def company_pr_comment(
     help="Optional policy JSON file to constrain apply-time GitHub writes.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_plan(
     roadmap_path: Path,
@@ -2601,7 +2616,7 @@ def company_plan(
 @click.option("--artifact", "artifact_name", default="issue-plan", show_default=True, help="Artifact name to approve.")
 @click.option("--approver", default=None, help="Optional approver identity.")
 @click.option("--approval-note", default=None, help="Optional note captured in immutable approval audit log.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_approve(
     run_id: str,
@@ -2684,7 +2699,7 @@ def company_approve(
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help="Optional policy JSON file. Overrides policy embedded in the artifact.",
 )
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_apply(
     run_id: str,
@@ -2784,7 +2799,7 @@ def company_apply(
 
 @company_group.command(name="artifacts")
 @click.option("--run-id", required=True, help="Run ID to inspect.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact map as JSON.")
 def company_artifacts(run_id: str, output_dir: str, json_output: bool) -> None:
     """List run-linked company artifacts."""
@@ -2843,6 +2858,40 @@ def office_init(project_path: Path, name: str | None, json_output: bool) -> None
         title="Project Office Initialized",
         border_style="green",
     ))
+
+
+@office_group.command(name="migrate")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to migrate.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print the result as JSON.")
+def office_migrate(project_path: Path, json_output: bool) -> None:
+    """Move a legacy .parallel-agents-output workspace onto the unified root.
+
+    Safe and explicit: only renames when the legacy directory exists and the
+    unified .parallel-agents directory does not. Never merges or overwrites.
+    """
+    result = migrate_legacy_artifact_dir(project_path)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, default=str))
+    elif result.get("migrated"):
+        console.print(
+            f"Migrated workspace: {result['legacy']} -> {result['target']}",
+            style="green",
+        )
+    elif result.get("reason") == "no-legacy-dir":
+        console.print("Nothing to migrate: no legacy .parallel-agents-output found.")
+    elif result.get("reason") == "target-exists":
+        console.print(
+            "Refusing to migrate: .parallel-agents already exists. Merge manually.",
+            style="yellow",
+        )
+        sys.exit(EXIT_RUNTIME_FAILURE)
 
 
 @office_group.command(name="status")
@@ -3520,7 +3569,7 @@ def gateway_group() -> None:
 @gateway_group.command(name="start")
 @click.option("--host", default="127.0.0.1", show_default=True, help="Host address to bind.")
 @click.option("--port", default=8733, type=int, show_default=True, help="Port to bind.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Gateway state and artifact directory.")
+@click.option("--output-dir", default=DEFAULT_ARTIFACT_DIR, show_default=True, help="Gateway state and artifact directory.")
 @click.option(
     "--api-key",
     default=None,
@@ -3583,7 +3632,7 @@ def gateway_start(
 @cli.command()
 @click.argument("run_id")
 @click.option("--store", "-s", type=click.Choice(["file", "sqlite"]), default="file")
-@click.option("--output-dir", default=".parallel-agents-output")
+@click.option("--output-dir", default=DEFAULT_ARTIFACT_DIR)
 def show(run_id: str, store: str, output_dir: str) -> None:
     """View results of a previous run."""
     evidence_store = create_evidence_store(output_dir, run_id, store)
@@ -3621,7 +3670,7 @@ def show(run_id: str, store: str, output_dir: str) -> None:
 
 @cli.command()
 @click.option("--store", "-s", type=click.Choice(["file", "sqlite"]), default="file")
-@click.option("--output-dir", default=".parallel-agents-output")
+@click.option("--output-dir", default=DEFAULT_ARTIFACT_DIR)
 def history(store: str, output_dir: str) -> None:
     """List previous runs."""
     if store == "sqlite":

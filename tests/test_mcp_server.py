@@ -362,7 +362,8 @@ async def test_company_plan_approve_artifacts_and_templates_tools(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_company_apply_tool_requires_approval(tmp_path):
+async def test_company_apply_tool_requires_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("PA_ALLOW_WRITE_TOOLS", "1")
     from parallel_agents.company_workflows import build_roadmap, create_product_brief
     from parallel_agents.mcp_server import company_apply, company_plan
 
@@ -377,6 +378,17 @@ async def test_company_apply_tool_requires_approval(tmp_path):
     payload = json.loads(await company_apply("run-mcp-unapproved", output_dir=str(tmp_path)))
     assert payload["error"] is True
     assert "not approved" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_company_apply_tool_disabled_by_default(tmp_path, monkeypatch):
+    # With PA_ALLOW_WRITE_TOOLS unset, apply must refuse before any write path.
+    monkeypatch.delenv("PA_ALLOW_WRITE_TOOLS", raising=False)
+    from parallel_agents.mcp_server import company_apply
+
+    payload = json.loads(await company_apply("run-anything", output_dir=str(tmp_path)))
+    assert payload["error"] is True
+    assert payload["error_type"] == "WriteToolsDisabled"
 
 
 @pytest.mark.asyncio

@@ -45,9 +45,10 @@ from parallel_agents.company_workflows import (
     build_release_readiness_report,
     build_roadmap,
     create_product_brief,
+    issue_plan_items,
     recommend_tech_stack,
 )
-from parallel_agents.config import PipelineConfig
+from parallel_agents.config import DEFAULT_ARTIFACT_DIR, PipelineConfig
 from parallel_agents.eval_harness import (
     compute_evaluation_score,
     load_evaluation_results,
@@ -91,6 +92,34 @@ TOOL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
+def _write_tools_enabled() -> bool:
+    """Whether tools that perform external/irreversible writes are allowed.
+
+    Off by default: the MCP server is frequently wired into autonomous agents,
+    so live GitHub writes must be explicitly opted into via PA_ALLOW_WRITE_TOOLS
+    (set to 1/true/yes/on). Read analysis and the local plan/approve flow remain
+    available regardless; only the apply step that mutates a remote is gated.
+    """
+    return os.environ.get("PA_ALLOW_WRITE_TOOLS", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _write_tools_disabled_json(tool_name: str) -> str:
+    return json.dumps(
+        {
+            "error": True,
+            "error_type": "WriteToolsDisabled",
+            "message": (
+                f"'{tool_name}' performs external writes and is disabled by default. "
+                "Set PA_ALLOW_WRITE_TOOLS=1 to enable it, or run the apply step from "
+                "the desktop Approvals flow."
+            ),
+        },
+        indent=2,
+    )
+
+
 @mcp.tool()
 async def tool_discovery(include_write: bool = True) -> str:
     """List available MCP tools with access level and approval requirements."""
@@ -102,8 +131,11 @@ async def tool_discovery(include_write: bool = True) -> str:
             "count": len(tools),
             "read_only_count": sum(1 for tool in tools if tool["access"] == "read"),
             "write_count": sum(1 for tool in tools if tool["access"] == "write"),
+            "write_tools_enabled": _write_tools_enabled(),
             "notes": [
                 "Write tools remain approval-gated by default.",
+                "company_apply performs live GitHub writes and is disabled unless "
+                "PA_ALLOW_WRITE_TOOLS=1.",
                 "Use company_plan -> company_approve -> company_apply for controlled GitHub writes.",
             ],
         }
@@ -319,7 +351,7 @@ async def company_idea(
     idea: str,
     title: str = "",
     run_id: str = "",
-    output_dir: str = ".parallel-agents-output",
+    output_dir: str = DEFAULT_ARTIFACT_DIR,
 ) -> str:
     """Create a ProductBrief artifact from a plain-language idea."""
     try:
@@ -339,7 +371,7 @@ async def company_stack(
     repo_path: str = "",
     focus: str = "AI software delivery workflow",
     run_id: str = "",
-    output_dir: str = ".parallel-agents-output",
+    output_dir: str = DEFAULT_ARTIFACT_DIR,
 ) -> str:
     """Recommend a technology stack based on repository signals."""
     try:
@@ -361,7 +393,7 @@ async def company_roadmap(
     horizon_weeks: int = 12,
     title: str = "",
     run_id: str = "",
-    output_dir: str = ".parallel-agents-output",
+    output_dir: str = DEFAULT_ARTIFACT_DIR,
 ) -> str:
     """Create a roadmap artifact from an idea."""
     try:
@@ -389,7 +421,7 @@ async def company_roadmap(
 async def company_release_check(
     repo_path: str = "",
     run_id: str = "",
-    output_dir: str = ".parallel-agents-output",
+    output_dir: str = DEFAULT_ARTIFACT_DIR,
 ) -> str:
     """Run release-readiness checks for a repository."""
     try:
@@ -412,7 +444,7 @@ async def company_plan(
     labels: str = "planning,ai-agents",
     create_milestones: bool = True,
     run_id: str = "",
-    output_dir: str = ".parallel-agents-output",
+    output_dir: str = DEFAULT_ARTIFACT_DIR,
 ) -> str:
     """Create an approval-gated GitHub issue plan from a roadmap JSON payload."""
     try:
@@ -456,7 +488,7 @@ async def company_approve(
     approver: str = "",
     approval_note: str = "",
     artifact: str = "issue-plan",
-    output_dir: str = ".parallel-agents-output",
+    output_dir: str = DEFAULT_ARTIFACT_DIR,
 ) -> str:
     """Approve a pending company issue plan artifact."""
     try:
@@ -498,10 +530,12 @@ async def company_approve(
 async def company_apply(
     run_id: str,
     artifact: str = "issue-plan",
-    output_dir: str = ".parallel-agents-output",
+    output_dir: str = DEFAULT_ARTIFACT_DIR,
 ) -> str:
     """Apply an approved company issue plan with policy validation before GitHub writes."""
     try:
+        if not _write_tools_enabled():
+            return _write_tools_disabled_json("company_apply")
         payload = load_company_artifact(output_dir, run_id, artifact)
         if not payload:
             return json.dumps({
@@ -520,7 +554,7 @@ async def company_apply(
                 "message": "Artifact repo is invalid or missing.",
             })
         owner, repo_name = parsed
-        issue_plan = payload.get("issue_plan") or []
+        issue_plan = issue_plan_items(payload)
         policy = derive_policy_from_issue_plan(f"{owner}/{repo_name}", issue_plan)
         if isinstance(payload.get("apply_policy"), dict):
             policy = CompanyApplyPolicy.model_validate(payload["apply_policy"])
@@ -557,7 +591,7 @@ async def company_apply(
 @mcp.tool()
 async def company_artifacts(
     run_id: str,
-    output_dir: str = ".parallel-agents-output",
+    output_dir: str = DEFAULT_ARTIFACT_DIR,
 ) -> str:
     """List run-linked company artifacts."""
     try:
