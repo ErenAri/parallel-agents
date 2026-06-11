@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 import sys
 import traceback
 
-from parallel_agents.desktop._qt import QApplication, QMessageBox
+from parallel_agents.desktop._qt import QApplication, QMessageBox, QTimer
 from parallel_agents.desktop.main_window import MainWindow
 from parallel_agents.desktop.theme import apply_theme
 
@@ -27,7 +28,14 @@ def _install_excepthook() -> None:
 
 
 def run(argv: list[str] | None = None) -> int:
-    app = QApplication(argv if argv is not None else sys.argv)
+    raw = list(sys.argv if argv is None else argv)
+    # --smoke (or PA_DESKTOP_SMOKE=1) builds the full window and exits 0 without
+    # entering the event loop. Used by CI to verify a packaged binary actually
+    # launches and constructs under an offscreen Qt platform.
+    smoke = "--smoke" in raw or os.environ.get("PA_DESKTOP_SMOKE") == "1"
+    qt_argv = [arg for arg in raw if arg != "--smoke"]
+
+    app = QApplication(qt_argv)
     app.setApplicationName("Parallel Agents Office")
     app.setOrganizationName("Parallel Agents")
     apply_theme(app)
@@ -35,5 +43,13 @@ def run(argv: list[str] | None = None) -> int:
 
     window = MainWindow()
     window.resize(1280, 800)
+    if smoke:
+        # Build the window, let Qt initialize, then close cleanly without the
+        # interactive "jobs still running" prompt (which would block offscreen).
+        window._headless = True
+        window.show()
+        QTimer.singleShot(0, window.close)
+        QTimer.singleShot(0, app.quit)
+        return app.exec()
     window.show()
     return app.exec()

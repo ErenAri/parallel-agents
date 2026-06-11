@@ -31,6 +31,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Parallel Agents Office")
 
+        # Headless/smoke mode: skip the interactive "jobs still running" close
+        # confirmation (a modal dialog has no one to dismiss it offscreen).
+        self._headless = False
+
         self.engine = EngineService()
         # Apply persisted user-level settings on launch (project ones load on open).
         self.engine.settings_store().load()
@@ -153,17 +157,18 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         jobs = self._running_jobs()
         if jobs:
-            confirm = QMessageBox.question(
-                self,
-                "Jobs still running",
-                "A step is still running (possibly a GitHub write).\n"
-                "Closing now may leave it half-finished. Close anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if confirm != QMessageBox.StandardButton.Yes:
-                event.ignore()
-                return
+            if not self._headless:
+                confirm = QMessageBox.question(
+                    self,
+                    "Jobs still running",
+                    "A step is still running (possibly a GitHub write).\n"
+                    "Closing now may leave it half-finished. Close anyway?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if confirm != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
             for job in jobs:
                 job.requestInterruption()
             for job in jobs:
