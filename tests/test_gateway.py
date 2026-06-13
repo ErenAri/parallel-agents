@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from parallel_agents.company_artifacts import load_company_artifact, persist_company_artifact
 from parallel_agents.company_workflows import build_roadmap, create_product_brief
 from parallel_agents.gateway import GatewayStore, create_gateway_app
+from parallel_agents.models import FinalOutput
 
 
 def _jwt_hs256(secret: str, payload: dict) -> str:
@@ -27,6 +28,17 @@ def _jwt_hs256(secret: str, payload: dict) -> str:
         hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
     ).rstrip(b"=").decode("utf-8")
     return f"{encoded_header}.{encoded_payload}.{sig}"
+
+
+def _slack_headers(secret: str, body: bytes, *, timestamp: int | None = None) -> dict[str, str]:
+    ts = str(timestamp or int(time.time()))
+    base = f"v0:{ts}:".encode("utf-8") + body
+    signature = "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    return {
+        "x-slack-request-timestamp": ts,
+        "x-slack-signature": signature,
+        "content-type": "application/json",
+    }
 
 
 def _wait_for_status(
@@ -64,6 +76,230 @@ def test_gateway_health_and_project_creation(tmp_path):
 
     fetched = client.get(f"/projects/{created['id']}").json()
     assert fetched["repo_path"] == "/repo"
+
+
+def test_gateway_pipeline_run_endpoint_uses_gateway_run_id(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    class FakePipeline:
+        def __init__(self, config):
+            captured["output_dir"] = config.output_dir
+            captured["store_backend"] = config.store_backend
+            captured["permission_mode"] = config.permission_mode
+
+        async def run(self, task, repo_path=None, on_status=None, on_event=None, run_id=None):
+            captured["task"] = task
+            captured["repo_path"] = repo_path
+            captured["run_id"] = run_id
+            if on_status:
+                on_status("Planning: fake pipeline step")
+            if on_event:
+                on_event({"agent": "pipeline", "phase": "planning", "status": "started"})
+            return FinalOutput(
+                summary="pipeline complete",
+                metadata={
+                    "run_id": run_id,
+                    "cost": {"total_tokens": 7, "total_cost_usd": 0.01},
+                },
+            )
+
+    monkeypatch.setattr("parallel_agents.gateway.Pipeline", FakePipeline)
+    app = create_gateway_app(tmp_path)
+    client = TestClient(app)
+
+    result = client.post(
+        "/runs/pipeline",
+        json={
+            "run_id": "run-pipeline",
+            "task": "Review auth flow",
+            "repo_path": "/repo",
+            "permission_mode": "plan",
+        },
+    ).json()
+
+    assert result["status"] == "succeeded"
+    assert captured["run_id"] == "run-pipeline"
+    assert captured["task"] == "Review auth flow"
+    assert captured["repo_path"] == "/repo"
+    assert captured["output_dir"] == str(tmp_path)
+    assert captured["permission_mode"] == "plan"
+    artifact = load_company_artifact(tmp_path, "run-pipeline", "final-output")
+    assert artifact["summary"] == "pipeline complete"
+    events = client.get("/runs/run-pipeline/events").json()
+    assert any(event["event"] == "pipeline_status" for event in events["events"])
+    assert any(event["event"] == "pipeline_trace" for event in events["events"])
+
+
+def test_gateway_pipeline_run_requires_task(tmp_path):
+    app = create_gateway_app(tmp_path)
+    client = TestClient(app)
+
+    result = client.post("/runs/pipeline", json={"run_id": "run-no-task"}).json()
+
+    assert result["status"] == "failed"
+    assert result["error_message"] == "task is required"
+
+
+def test_gateway_channel_inbound_requires_pairing_before_execution(tmp_path, monkeypatch):
+    executed: list[str] = []
+
+    class FakePipeline:
+        def __init__(self, config):
+            self.config = config
+
+        async def run(self, task, repo_path=None, on_status=None, on_event=None, run_id=None):
+            executed.append(task)
+            return FinalOutput(
+                summary="channel run complete",
+                metadata={
+                    "run_id": run_id,
+                    "cost": {"total_tokens": 1, "total_cost_usd": 0.0},
+                },
+            )
+
+    monkeypatch.setattr("parallel_agents.gateway.Pipeline", FakePipeline)
+    app = create_gateway_app(tmp_path)
+    client = TestClient(app)
+
+    blocked = client.post(
+        "/channels/inbound",
+        json={
+            "channel": "Slack",
+            "peer_id": "U123",
+            "message": "Review this repo",
+            "execute": True,
+            "wait": True,
+        },
+    ).json()
+
+    assert blocked["status"] == "pairing_required"
+    assert blocked["processed"] is False
+    assert blocked["channel"] == "slack"
+    assert blocked["pairing_code"]
+    assert executed == []
+
+    approved = client.post(
+        "/channels/pairing/approve",
+        json={"code": blocked["pairing_code"], "approved_by": "operator"},
+    ).json()
+    assert approved["status"] == "approved"
+    assert approved["channel"] == "slack"
+    assert approved["peer_id"] == "U123"
+
+    accepted = client.post(
+        "/channels/inbound",
+        json={
+            "channel": "slack",
+            "peer_id": "U123",
+            "message": "Review this repo",
+            "execute": True,
+            "wait": True,
+        },
+    ).json()
+
+    assert accepted["status"] == "accepted"
+    assert accepted["processed"] is True
+    assert accepted["run"]["status"] == "succeeded"
+    assert executed == ["Review this repo"]
+
+    peers = client.get("/channels/peers", params={"channel": "slack"}).json()
+    assert peers["count"] == 1
+    assert peers["peers"][0]["peer_id"] == "U123"
+
+
+def test_gateway_slack_events_url_verification(tmp_path):
+    app = create_gateway_app(tmp_path, slack_signing_secret="slack-secret")
+    client = TestClient(app)
+    body = json.dumps(
+        {"type": "url_verification", "challenge": "challenge-token"}
+    ).encode("utf-8")
+
+    response = client.post(
+        "/channels/slack/events",
+        content=body,
+        headers=_slack_headers("slack-secret", body),
+    )
+
+    assert response.status_code == 200
+    assert response.text == "challenge-token"
+
+
+def test_gateway_slack_events_rejects_bad_signature(tmp_path):
+    app = create_gateway_app(tmp_path, slack_signing_secret="slack-secret")
+    client = TestClient(app)
+    body = json.dumps({"type": "event_callback", "event": {"type": "message"}}).encode("utf-8")
+
+    response = client.post(
+        "/channels/slack/events",
+        content=body,
+        headers=_slack_headers("wrong-secret", body),
+    )
+
+    assert response.status_code == 401
+
+
+def test_gateway_slack_events_pairing_then_execution(tmp_path, monkeypatch):
+    executed: list[tuple[str, str | None]] = []
+
+    class FakePipeline:
+        def __init__(self, config):
+            self.config = config
+
+        async def run(self, task, repo_path=None, on_status=None, on_event=None, run_id=None):
+            executed.append((task, run_id))
+            return FinalOutput(
+                summary="slack run complete",
+                metadata={
+                    "run_id": run_id,
+                    "cost": {"total_tokens": 1, "total_cost_usd": 0.0},
+                },
+            )
+
+    monkeypatch.setattr("parallel_agents.gateway.Pipeline", FakePipeline)
+    app = create_gateway_app(tmp_path, slack_signing_secret="slack-secret")
+    client = TestClient(app)
+
+    event_payload = {
+        "type": "event_callback",
+        "team_id": "T1",
+        "event_id": "Ev1",
+        "event": {
+            "type": "message",
+            "channel": "C1",
+            "user": "U1",
+            "text": "Review Slack request path",
+        },
+    }
+    body = json.dumps(event_payload).encode("utf-8")
+    blocked = client.post(
+        "/channels/slack/events",
+        content=body,
+        headers=_slack_headers("slack-secret", body),
+    ).json()
+
+    assert blocked["status"] == "pairing_required"
+    assert blocked["processed"] is False
+    assert blocked["peer_id"] == "T1:C1:U1"
+    assert executed == []
+
+    approved = client.post(
+        "/channels/pairing/approve",
+        json={"code": blocked["pairing_code"], "approved_by": "operator"},
+    ).json()
+    assert approved["status"] == "approved"
+
+    accepted = client.post(
+        "/channels/slack/events",
+        content=body,
+        headers=_slack_headers("slack-secret", body),
+    ).json()
+
+    assert accepted["status"] == "accepted"
+    assert accepted["processed"] is True
+    run_id = accepted["run"]["id"]
+    run = _wait_for_status(client, run_id, expected_statuses={"succeeded"})
+    assert run["status"] == "succeeded"
+    assert executed == [("Review Slack request path", run_id)]
 
 
 def test_gateway_memory_endpoints(tmp_path):

@@ -128,7 +128,7 @@ async def _mock_query_generator(response_text: str):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_end_to_end():
+async def test_pipeline_end_to_end(tmp_path):
     """Test full pipeline with mocked query() calls."""
     config = PipelineConfig(
         workers={
@@ -143,6 +143,7 @@ async def test_pipeline_end_to_end():
             "docs": WorkerConfig(enabled=False),
         },
         store_backend="file",
+        output_dir=str(tmp_path),
     )
 
     responses = [
@@ -166,6 +167,7 @@ async def test_pipeline_end_to_end():
 
     mock_fn = make_mock_query()
     statuses: list[str] = []
+    events: list[dict] = []
 
     with patch("parallel_agents.agents.planner.query", new=mock_fn):
         with patch("parallel_agents.agents.base.query", new=mock_fn):
@@ -175,16 +177,28 @@ async def test_pipeline_end_to_end():
                     "Test the security and review",
                     repo_path="/tmp/mock-repo",
                     on_status=statuses.append,
+                    on_event=events.append,
+                    run_id="run-test",
                 )
 
     assert isinstance(result, FinalOutput)
     assert result.summary != ""
     assert len(statuses) > 0  # Progress callbacks were called
+    assert any(
+        event.get("agent") == "pipeline"
+        and event.get("phase") == "planning"
+        and event.get("status") == "started"
+        for event in events
+    )
+    assert any(event.get("agent") == "security" for event in events)
 
     # Check cost tracking was recorded
     assert "cost" in result.metadata
+    assert result.metadata["run_id"] == "run-test"
     cost = result.metadata["cost"]
     assert cost["total_tokens"] >= 0
+    final_payload = json.loads((tmp_path / "run-test" / "final_output.json").read_text(encoding="utf-8"))
+    assert final_payload["metadata"]["run_id"] == "run-test"
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,9 @@ build/
 .venv/
 venv/
 env/
+.uv-python/
+.uv-cache/
+uv.lock
 
 # IDE
 .vscode/
@@ -38,6 +41,11 @@ npm-wrapper/node_modules/
 
 # pytest
 .pytest_cache/
+.coverage
+htmlcov/
 
 # local assistant workspace
 .claude/
+
+# local connector/gateway scratch
+tmp-slack-test/

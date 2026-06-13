@@ -87,10 +87,11 @@ Completed:
 - Incremental run event stream for enqueue/start/status/complete/cancel.
 - Optional API-key protection for non-local gateway exposure.
 - Optional JWT HS256 auth mode with issuer/audience validation for non-local gateway exposure.
+- Gateway-managed core pipeline runs via `POST /runs/pipeline`, with persistent run/job/event state and `final-output` artifacts.
 
 Remaining:
 
-- Desktop/exe shell integration.
+- Deeper desktop/exe shell integration on top of the gateway control plane.
 - Hosted-grade auth for multi-tenant remote deployments (OAuth/session model).
 
 ## Phase 4: Local Desktop Office
@@ -103,12 +104,13 @@ Completed:
 
 - Project-folder workspace layout under `.parallel-agents/`.
 - `parallel-agents office init` to create local workspace metadata and directories.
+- `parallel-agents office onboard` to create/repair workspace setup and report model/GitHub readiness for first use.
 - `parallel-agents office status` to inspect workspace health.
 - `parallel-agents office doctor` to run local readiness diagnostics and strict checks.
 - `parallel-agents office fix-setup` for safe CLI remediation fallback.
 - Desktop project-home summary and recent project picker.
 - Desktop project-home card now surfaces doctor health status and warning/failure counts.
-- Desktop Projects page now provides one-click `Run Doctor` and `Fix Setup` actions.
+- Desktop Projects page now provides one-click `Onboard`, `Run Doctor`, and `Fix Setup` actions.
 - Desktop approvals queue filters with approved issue-plan apply action.
 - Desktop GitHub PR creation with run-linked PR summary artifact.
 - Workspace knowledge layer v1:
@@ -124,11 +126,22 @@ Completed:
 - Desktop cross-run benchmark comparison panel (baseline vs candidate) with delta report export.
 - Desktop drill-down analytics in comparison view (workflow/project/case-level change drivers).
 - Workflow navigation into detailed case evidence and artifact links from comparison rows.
+- Desktop run execution can route through the local gateway control plane when available, with in-process fallback.
+- Desktop can start, stop, and inspect a project-scoped local gateway process.
+- Desktop worker tiles now consume structured pipeline trace events, with legacy status-string fallback.
+- Local gateway channel-adapter boundary with default pairing/allowlist behavior for inbound senders.
+- Signed Slack Events endpoint mapped onto the local pairing adapter.
+- CLI operator commands for channel inbound simulation, pairing approval, and peer listing.
+- Generated patches require final-output approval before desktop PR creation.
+- Desktop PR branch suggestions avoid pushing directly from `main`/`master`.
 - PyInstaller spec includes project-office module for standalone binary builds.
 
 Remaining:
 
 - Desktop polish and usability hardening for production `.exe` workflows.
+- Installable OS-level gateway daemon/tray lifecycle beyond the current desktop-owned session process.
+- Telegram connector on top of the pairing adapter.
+- Discord connector after Telegram, once channel/server routing rules are clearer.
 
 ## Phase 5: Remote MCP Product Surface
 

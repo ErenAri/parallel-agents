@@ -49,9 +49,13 @@ The current release line is focused on local, reviewable workflows and a project
   - workspace memory endpoints (`/memory/entries`, `/memory/search`, `/memory/policies`)
   - in-process queued execution with persistent run/job states
   - run listing plus per-run job inspection
+  - core pipeline run endpoint (`POST /runs/pipeline`) with persistent events and `final-output` artifacts
   - cancel and retry controls
   - optional API-key protection for non-local exposure
   - optional JWT HS256 auth with issuer/audience validation
+  - channel adapter endpoints with default pairing/allowlist behavior for unknown inbound senders
+  - signed Slack Events endpoint with URL verification, bot-message ignore rules, and local pairing enforcement
+  - CLI commands for channel inbound simulation, pairing approval, and approved peer listing
 - MCP product-surface foundation:
   - `tool_discovery` output with read/write access classes
   - approval-required metadata for write tools
@@ -64,6 +68,7 @@ The current release line is focused on local, reviewable workflows and a project
 - Local desktop/project office foundation:
   - `.parallel-agents/` workspace inside a project folder
   - `office init`, `office status`, and `office home` commands
+  - `office onboard` command for first-run setup, model readiness, GitHub readiness, and next actions
   - `office doctor` diagnostics command for local readiness checks
   - `office fix-setup` CLI fallback for safe local setup remediation
   - `office artifacts` for run-linked artifact inspection
@@ -71,9 +76,11 @@ The current release line is focused on local, reviewable workflows and a project
   - workspace memory files for decisions, lessons, and policies
   - `office memory add/list/search/policies` for local knowledge capture
   - desktop project-home summary with recent project picker
+  - desktop onboarding action for setup/model/GitHub readiness
   - desktop project actions for `Run Doctor` and `Fix Setup`
-  - desktop Runs page wired to execute real pipeline runs
-  - live run activity stream and per-worker status updates in desktop UI
+  - desktop project-scoped gateway start/stop/status controls
+  - desktop Runs page wired to execute real pipeline runs, using the local gateway when available
+  - live run activity stream and event-native per-worker status updates in desktop UI
   - artifact compare view against previous runs (inline unified diff)
   - artifact browser search/filter/sort controls by run and artifact type
   - artifact quick actions (open file, reveal folder, export copy)
@@ -86,8 +93,8 @@ The current release line is focused on local, reviewable workflows and a project
   - comparison drill-down sections for workflow/project/case-level change drivers
   - case-row evidence navigation links (score/gate/breakdown/results and run artifacts)
   - desktop approvals queue filters and one-click approved issue-plan apply
-  - desktop GitHub PR creation flow with run-linked PR summary artifact
-  - PyInstaller spec support for the project-office module
+  - desktop GitHub PR creation flow with run-linked PR summary artifact, branch suggestions, and generated-patch approval gate
+  - PyInstaller spec support for the project-office, onboarding, and gateway modules
 
 ## Experimental
 
@@ -109,6 +116,7 @@ parallel-agents company apply --run-id run-123
 ```
 
 ```bash
+parallel-agents office onboard --project . --name "Project Name"
 parallel-agents office init --project . --name "Project Name"
 parallel-agents office status --project .
 parallel-agents office doctor --project .
@@ -119,6 +127,11 @@ parallel-agents office artifacts --project .
 
 ```bash
 parallel-agents gateway start --host 127.0.0.1 --port 8733
+
+# enqueue a real planner/worker/judge run through the local job API
+curl -X POST http://127.0.0.1:8733/runs/pipeline ^
+  -H "Content-Type: application/json" ^
+  -d "{\"run_id\":\"run-123\",\"task\":\"Review this repository\",\"repo_path\":\".\"}"
 
 # optional auth for non-local use (API key)
 set PA_GATEWAY_API_KEY=my-secret
@@ -134,6 +147,8 @@ parallel-agents gateway start --host 0.0.0.0 --port 8733
 ## Known Limitations
 
 - Desktop GUI is available but still maturing (single-user local workflow focus).
+- Desktop gateway lifecycle is session-owned by the UI; OS daemon/tray install and auto-restart are not implemented yet.
+- Slack is the only real external channel connector; Telegram and Discord remain planned connectors on top of the pairing adapter.
 - No hosted MCP endpoint or OAuth yet.
 - No distributed/remote worker execution beyond the current local in-process queue.
 - No hosted-grade OAuth/session model yet (local API key/JWT + gateway policy toggles are available).
@@ -149,3 +164,4 @@ Expand the local desktop office into a full `.exe` product surface:
 - GitHub connect + repository integration
 - PR creation and review actions from the local office
 - richer release and productivity views
+- OS daemon/tray gateway lifecycle plus Telegram and Discord channel connectors

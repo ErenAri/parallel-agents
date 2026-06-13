@@ -6,7 +6,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from parallel_agents.agents.judge import run_judge
 from parallel_agents.agents.planner import is_parse_failure, run_planner
@@ -86,16 +86,25 @@ class Pipeline:
         raw_input: str,
         repo_path: str | None = None,
         on_status: Callable[[str], None] | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        run_id: str | None = None,
     ) -> FinalOutput:
         task_input = self._build_task_input(raw_input, repo_path)
-        run_id = uuid.uuid4().hex[:12]
+        run_id = run_id or uuid.uuid4().hex[:12]
         store = create_evidence_store(
             self.config.output_dir, run_id, self.config.store_backend
         )
         manifest = RunManifest(run_id=run_id, input=task_input)
         store.save_manifest(manifest)
         try:
-            return await self._run_phases(task_input, run_id, store, manifest, on_status)
+            return await self._run_phases(
+                task_input,
+                run_id,
+                store,
+                manifest,
+                on_status,
+                on_event,
+            )
         except Exception:
             # Persist FAILED so a crashed run is distinguishable from one
             # still in flight when reading the evidence store later.
@@ -113,11 +122,17 @@ class Pipeline:
         store: BaseEvidenceStore,
         manifest: RunManifest,
         on_status: Callable[[str], None] | None,
+        on_event: Callable[[dict[str, Any]], None] | None,
     ) -> FinalOutput:
         def _update_status(msg: str) -> None:
             logger.info(msg)
             if on_status:
                 on_status(msg)
+
+        def _trace(agent_name: str, entry: dict[str, Any]) -> None:
+            store.append_trace(agent_name, entry)
+            if on_event:
+                on_event({"agent": agent_name, **entry})
 
         if task_input.github_url:
             _update_status("Resolving GitHub issue context...")
@@ -154,14 +169,14 @@ class Pipeline:
         # Phase 1: Planning
         _update_status("Planning: analyzing repository and creating task plan...")
         manifest.phases["planning"] = {"status": "running", "started_at": _now_iso()}
-        store.append_trace("pipeline", {"phase": "planning", "status": "started", "ts": _now_iso()})
+        _trace("pipeline", {"phase": "planning", "status": "started", "ts": _now_iso()})
         planning_started = datetime.now(timezone.utc)
         plan = await run_planner(task_input, self.config)
         planning_completed = datetime.now(timezone.utc)
         store.save_plan(plan)
         manifest.phases["planning"]["status"] = "completed"
         manifest.phases["planning"]["completed_at"] = _now_iso()
-        store.append_trace("pipeline", {
+        _trace("pipeline", {
             "phase": "planning", "status": "completed", "ts": _now_iso(),
             "subtask_count": len(plan.subtasks),
         })
@@ -201,7 +216,7 @@ class Pipeline:
         batches = split_tasks(plan, self.config)
         manifest.phases["splitting"]["status"] = "completed"
         manifest.phases["splitting"]["completed_at"] = _now_iso()
-        store.append_trace("pipeline", {
+        _trace("pipeline", {
             "phase": "splitting", "status": "completed", "ts": _now_iso(),
             "batch_count": len(batches),
             "batches": [[s.assigned_worker for s in b] for b in batches],
@@ -218,12 +233,12 @@ class Pipeline:
         for batch_idx, batch in enumerate(batches):
             workers_in_batch = [s.assigned_worker for s in batch]
             _update_status(f"  Batch {batch_idx + 1}/{len(batches)}: {workers_in_batch}")
-            store.append_trace("pipeline", {
+            _trace("pipeline", {
                 "phase": "execution", "batch": batch_idx + 1,
                 "workers": workers_in_batch, "status": "started", "ts": _now_iso(),
             })
 
-            batch_results = await self._run_batch(batch, plan, semaphore, store)
+            batch_results = await self._run_batch(batch, plan, semaphore, store, on_event)
 
             for result in batch_results:
                 # Key by worker name for the common one-subtask-per-worker case,
@@ -247,14 +262,14 @@ class Pipeline:
                     ),
                 )
 
-                store.append_trace(result.worker_name, {
+                _trace(result.worker_name, {
                     "status": result.status,
                     "findings": len(result.findings),
                     "recommendations": len(result.recommendations),
                     "ts": _now_iso(),
                 })
 
-            store.append_trace("pipeline", {
+            _trace("pipeline", {
                 "phase": "execution", "batch": batch_idx + 1,
                 "status": "completed", "ts": _now_iso(),
                 "results": {r.worker_name: r.status for r in batch_results},
@@ -267,15 +282,14 @@ class Pipeline:
         # Phase 4: Judging
         _update_status("Judge is merging results and producing final output...")
         manifest.phases["judging"] = {"status": "running", "started_at": _now_iso()}
-        store.append_trace("pipeline", {"phase": "judging", "status": "started", "ts": _now_iso()})
+        _trace("pipeline", {"phase": "judging", "status": "started", "ts": _now_iso()})
         judging_started = datetime.now(timezone.utc)
         final_output = await run_judge(plan, all_results, self.config)
         _validate_and_normalize_patch(final_output)
         judging_completed = datetime.now(timezone.utc)
-        store.save_final_output(final_output)
         manifest.phases["judging"]["status"] = "completed"
         manifest.phases["judging"]["completed_at"] = _now_iso()
-        store.append_trace("pipeline", {
+        _trace("pipeline", {
             "phase": "judging", "status": "completed", "ts": _now_iso(),
             "risk_items": len(final_output.risk_report),
             "has_patch": final_output.patch is not None,
@@ -294,6 +308,7 @@ class Pipeline:
         manifest.total_cost_usd = cost_summary["total_cost_usd"]
         final_output.metadata["cost"] = cost_summary
         final_output.metadata["run_id"] = run_id
+        store.save_final_output(final_output)
 
         manifest.status = TaskStatus.COMPLETED
         store.save_manifest(manifest)
@@ -311,7 +326,13 @@ class Pipeline:
         plan: TaskPlan,
         semaphore: asyncio.Semaphore,
         store: BaseEvidenceStore,
+        on_event: Callable[[dict[str, Any]], None] | None,
     ) -> list[WorkerResult]:
+        def _trace(agent_name: str, entry: dict[str, Any]) -> None:
+            store.append_trace(agent_name, entry)
+            if on_event:
+                on_event({"agent": agent_name, **entry})
+
         async def _run_one(subtask: Subtask) -> WorkerResult:
             async with semaphore:
                 worker_cls = WORKER_REGISTRY.get(subtask.assigned_worker)
@@ -333,7 +354,7 @@ class Pipeline:
                     )
 
                 worker = worker_cls(worker_config)
-                store.append_trace(worker.name, {
+                _trace(worker.name, {
                     "event": "worker_started",
                     "subtask_id": subtask.id,
                     "ts": _now_iso(),
@@ -347,7 +368,7 @@ class Pipeline:
                     timeout=worker_config.timeout_seconds,
                 )
 
-                store.append_trace(worker.name, {
+                _trace(worker.name, {
                     "event": "worker_completed",
                     "subtask_id": subtask.id,
                     "status": result.status,

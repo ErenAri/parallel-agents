@@ -28,6 +28,8 @@ a = Analysis(
         "parallel_agents.evidence_store",
         "parallel_agents.cost_tracker",
         "parallel_agents.project_office",
+        "parallel_agents.onboarding",
+        "parallel_agents.gateway",
         "parallel_agents.company_artifacts",
         "parallel_agents.company_policy",
         "parallel_agents.company_workflows",
@@ -62,6 +64,9 @@ a = Analysis(
         "pydantic",
         "pydantic_settings",
         "anthropic",
+        "fastapi",
+        "starlette",
+        "uvicorn",
         # PySide6 — PyInstaller usually picks these up via its hook,
         # listed explicitly for clarity and to fail fast on missing extra.
         "PySide6",

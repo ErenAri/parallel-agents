@@ -635,8 +635,8 @@ class CompanyPage(Page):
 
         if not self.pr_head_input.text().strip():
             try:
-                home = self.engine.workspace_home()
-                if home.current_branch:
-                    self.pr_head_input.setText(home.current_branch)
+                suggested_branch = self.engine.suggest_pr_branch(self._run_id)
+                if suggested_branch:
+                    self.pr_head_input.setText(suggested_branch)
             except Exception:
                 pass

@@ -121,6 +121,7 @@ parallel-agents company apply --run-id run-123
 parallel-agents company apply --run-id run-123 --policy-file company/apply-policy.json
 
 # Initialize a project-folder office workspace
+parallel-agents office onboard --project ./my-project --name "My Project"
 parallel-agents office init --project ./my-project --name "My Project"
 parallel-agents office status --project ./my-project
 parallel-agents office doctor --project ./my-project
@@ -156,6 +157,15 @@ parallel-agents gateway start --jwt-secret replace-with-shared-secret --jwt-issu
 # Optional remote MCP write enablement over gateway /mcp endpoints
 set PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS=1
 parallel-agents gateway start --allow-remote-write-tools
+
+# Optional Slack Events connector
+set PA_GATEWAY_SLACK_SIGNING_SECRET=xox-signing-secret
+parallel-agents gateway start --slack-signing-secret xox-signing-secret
+
+# Channel pairing adapter
+parallel-agents gateway channel inbound --channel slack --peer-id U123 --message "Review this repo" --execute
+parallel-agents gateway channel approve --code ABC123 --approved-by operator
+parallel-agents gateway channel peers --channel slack
 ```
 
 ## CLI Commands
@@ -172,6 +182,7 @@ parallel-agents gateway start --allow-remote-write-tools
 | `parallel-agents eval run/annotate/sync-pr/sync-ci/score/compare/breakdown/publish/gate` | Run, annotate, auto-sync PR acceptance and CI regressions, score, compare, break down cost/time, publish benchmark snapshots, and quality-gate productivity/effectiveness benchmarks |
 | `parallel-agents release verify` | Run consolidated release checklist checks (lint/tests/build/help/mcp/npm/version parity) |
 | `parallel-agents gateway start` | Start the local project/run/job API |
+| `parallel-agents gateway channel inbound/approve/peers` | Exercise local inbound-channel pairing and peer allowlist workflows |
 
 ## Local Project Office
 
@@ -192,6 +203,7 @@ my-project/
 Initialize it with:
 
 ```bash
+parallel-agents office onboard --project ./my-project --name "My Project"
 parallel-agents office init --project ./my-project --name "My Project"
 parallel-agents office status --project ./my-project
 parallel-agents office doctor --project ./my-project --strict
@@ -203,7 +215,10 @@ parallel-agents office artifacts --project ./my-project
 Desktop Office (`parallel-agents-desktop`) now includes:
 - project home summary with recent project picker
 - workspace doctor status signal (healthy/attention + warning/failure counts)
-- live pipeline run execution with activity streaming and worker status tiles
+- first-run onboarding action for workspace setup, model readiness, and GitHub readiness
+- desktop-owned local gateway controls for start/stop/status
+- live pipeline run execution through the local gateway when available, with in-process fallback
+- event-native worker status updates from structured pipeline traces, with text-status fallback
 - artifact compare against previous runs (inline unified diff)
 - artifact browser search/filter/sort controls by run and artifact type
 - artifact quick actions (open file, reveal folder, export copy)
@@ -217,10 +232,11 @@ Desktop Office (`parallel-agents-desktop`) now includes:
 - case-row evidence links to underlying score/gate/breakdown/results/run artifacts
 - approvals queue with status filters, bulk approve/reject, artifact diff preview, and audit-event drilldown
 - company workflow steps through issue-plan apply
-- GitHub PR creation from run context with generated PR summary markdown
+- GitHub PR creation from run context with suggested branch names and generated PR summary markdown
+- generated patches require approval of the exact `final-output` artifact before PR creation
 - built-in `gh auth status` check from the Company flow before live GitHub writes
 
-The gateway remains an internal job API for local automation and future desktop shells. It is not the primary product UI.
+The gateway remains an internal job API for local automation and desktop shells. It is not the primary product UI. The desktop can start/stop a project-scoped gateway for the current session. Set `PA_DESKTOP_GATEWAY_URL` or leave `PA_DESKTOP_USE_GATEWAY=auto` to let the desktop use `http://127.0.0.1:8733` when it is running; set `PA_DESKTOP_GATEWAY_REQUIRED=1` to fail instead of falling back to in-process runs.
 
 ## Gateway API
 
@@ -236,6 +252,11 @@ The local gateway exposes a persistent API for projects, runs, jobs, artifacts, 
 - `GET /memory/search`
 - `GET /memory/policies`
 - `PUT /memory/policies`
+- `POST /runs/pipeline`
+- `POST /channels/slack/events`
+- `POST /channels/inbound`
+- `POST /channels/pairing/approve`
+- `GET /channels/peers`
 - `POST /runs/company/idea`
 - `POST /runs/company/roadmap`
 - `POST /runs/company/plan`
