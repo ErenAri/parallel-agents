@@ -22,16 +22,28 @@ async def run_query_via_cli(
     functional even when the SDK parser lags behind new CLI message types.
     """
     cli_path = _find_claude_cli()
-    cmd = _build_cli_command(cli_path, prompt, options)
+    effective_prompt = _with_inlined_system_prompt(prompt, options)
+    cmd = _build_cli_command(cli_path, options)
     cwd = str(options.cwd) if options.cwd else None
 
+    # Deliver the prompt over stdin rather than as a positional argument.
+    # With --print, Claude CLI 2.1.x reads the prompt from stdin whenever stdin
+    # is not a TTY (which is always the case under create_subprocess_exec). If
+    # stdin is left unset it is empty/closed, and the CLI then rejects the run
+    # ("Input must be provided either through stdin or as a prompt argument
+    # when using --print") even when a positional prompt follows "--". Piping
+    # stdin is the canonical non-interactive form and also avoids mis-parsing
+    # prompts that start with "-".
     process = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout_bytes, stderr_bytes = await process.communicate()
+    stdout_bytes, stderr_bytes = await process.communicate(
+        input=effective_prompt.encode("utf-8")
+    )
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = stderr_bytes.decode("utf-8", errors="replace")
 
@@ -46,16 +58,15 @@ async def run_query_via_cli(
 
 def _build_cli_command(
     cli_path: str,
-    prompt: str,
     options: ClaudeCodeOptions,
 ) -> list[str]:
-    effective_prompt = _with_inlined_system_prompt(prompt, options)
     cmd = [cli_path, "--output-format", "stream-json", "--verbose"]
 
     # NOTE:
-    # On Windows, passing multi-line values via --system-prompt/--append-system-prompt
-    # can cause Claude CLI prompt parsing failures when used with --print.
-    # For fallback mode, inline system prompts into the user prompt instead.
+    # System prompts are inlined into the stdin prompt (see
+    # _with_inlined_system_prompt) rather than passed via
+    # --system-prompt/--append-system-prompt, which can break --print prompt
+    # parsing on Windows with multi-line values.
 
     if options.allowed_tools:
         cmd.extend(["--allowedTools", ",".join(options.allowed_tools)])
@@ -97,7 +108,7 @@ def _build_cli_command(
         else:
             cmd.extend([f"--{flag}", str(value)])
 
-    cmd.extend(["--print", "--", effective_prompt])
+    cmd.append("--print")
     return cmd
 
 

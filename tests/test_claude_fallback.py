@@ -12,6 +12,7 @@ from parallel_agents.agents.planner import run_planner
 from parallel_agents.agents.workers.review import ReviewWorker
 from parallel_agents.claude_cli_fallback import _parse_stream_json_output
 from parallel_agents.claude_cli_fallback import _build_cli_command
+from parallel_agents.claude_cli_fallback import _with_inlined_system_prompt
 from parallel_agents.config import PipelineConfig, WorkerConfig
 from parallel_agents.models import (
     RecommendationType,
@@ -197,7 +198,7 @@ def test_parse_stream_json_output_ignores_unknown_events():
     assert usage["output_tokens"] == 2
 
 
-def test_build_cli_command_inlines_system_prompt():
+def test_build_cli_command_uses_print_without_positional_prompt():
     from claude_code_sdk import ClaudeCodeOptions
 
     options = ClaudeCodeOptions(
@@ -206,9 +207,27 @@ def test_build_cli_command_inlines_system_prompt():
         model="haiku",
         permission_mode="default",
     )
-    cmd = _build_cli_command("claude", "User prompt body", options)
+    cmd = _build_cli_command("claude", options)
     cmd_text = " ".join(cmd)
+    # System prompts are inlined into the stdin prompt, never passed as flags.
     assert "--system-prompt" not in cmd_text
     assert "--append-system-prompt" not in cmd_text
-    assert "System instructions:" in cmd[-1]
-    assert "User request:" in cmd[-1]
+    # The prompt is delivered via stdin, so the command ends at --print with
+    # no end-of-options separator and no positional prompt argument.
+    assert cmd[-1] == "--print"
+    assert "--" not in cmd
+
+
+def test_inlined_system_prompt_merges_system_and_user():
+    from claude_code_sdk import ClaudeCodeOptions
+
+    options = ClaudeCodeOptions(
+        system_prompt="Line1\n- item",
+        append_system_prompt="Extra",
+    )
+    merged = _with_inlined_system_prompt("User prompt body", options)
+    assert "System instructions:" in merged
+    assert "User request:" in merged
+    assert "Line1\n- item" in merged
+    assert "Extra" in merged
+    assert "User prompt body" in merged

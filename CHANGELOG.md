@@ -7,6 +7,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ## [Unreleased]
 
 - Repositioned the product as **Parallel Agents Office - the AI software company OS** (declare your agent org as code, fork it, and watch it run). Updated README, VISION, ROADMAP, PROJECT_STATUS, and package/repository descriptions. The engine package name (`parallel-agents`) and CLI commands are unchanged.
+- Fixed Claude CLI fallback so runs work with Claude CLI 2.1.x: the prompt is now delivered over stdin instead of as a positional argument after `--`. Under `create_subprocess_exec` stdin is not a TTY, and the older positional form made the CLI abort with "Input must be provided either through stdin or as a prompt argument when using --print", failing every planner/worker/judge run.
 
 ## [0.4.4] - 2026-06-13
 
