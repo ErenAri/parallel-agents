@@ -221,6 +221,12 @@ class ProjectsPage(Page):
         self.body_layout.addWidget(self.recent_list, stretch=1)
         self._refresh_recent_projects()
 
+    def open_project_dialog(self) -> None:
+        self._open_project()
+
+    def init_project_dialog(self) -> None:
+        self._init_project()
+
     def _open_project(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select project folder")
         if not path:

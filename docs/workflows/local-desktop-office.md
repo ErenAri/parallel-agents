@@ -52,13 +52,15 @@ parallel-agents.exe office memory list --project .
 
 The desktop office should eventually provide:
 
+- Command Center landing page for project state, readiness, recent runs, and fast actions
+- top-level app chrome showing current project, gateway status, and LLM mode
 - project selection rooted in a local folder
 - first-run onboarding that prepares workspace setup and reports model/GitHub readiness
 - immediate workspace-health diagnostics signal from `office doctor`
 - one-click setup remediation path from desktop (`Fix Setup`) and CLI (`office fix-setup`)
 - desktop-owned project gateway start/stop/status controls
 - idea-to-release workflow controls
-- run queue and event-native worker status backed by the local gateway when available
+- run cockpit with state/worker/token/cost cards and event-native worker status
 - approval queue before write actions, including bulk actions, artifact diff preview, and audit drilldown
 - artifact browser for brief, roadmap, RFC, issue plan, release checks
 - artifact-browser controls for search/filter/sort and quick open/export actions

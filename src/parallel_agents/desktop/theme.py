@@ -261,6 +261,85 @@ QLabel#StatusItem {{
     border-left: 1px solid {BORDER};
 }}
 
+/* ---------------- App shell ---------------- */
+QFrame#TopBar {{
+    background: {ELEV_1};
+    border-bottom: 1px solid {BORDER};
+}}
+QLabel#TopBarTitle {{
+    color: {TEXT_HI};
+    font-size: {FS_TITLE}px;
+    font-weight: 600;
+}}
+QLabel#TopBarMeta {{
+    color: {TEXT_DIM};
+    font-size: {FS_META}px;
+}}
+QLabel#TopBarPill {{
+    color: {TEXT};
+    background: {ELEV_2};
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+    padding: {S1}px {S3}px;
+    font-size: {FS_META}px;
+}}
+
+/* ---------------- Design system widgets ---------------- */
+QLabel#SectionHeader {{
+    color: {TEXT_HI};
+    font-size: {FS_SECTION}px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+}}
+QLabel#SectionHint {{
+    color: {TEXT_DIM};
+    font-size: {FS_BODY}px;
+}}
+QLabel#CardTitle {{
+    color: {TEXT_HI};
+    font-size: {FS_TITLE}px;
+    font-weight: 600;
+}}
+QLabel#CardMeta {{
+    color: {TEXT_DIM};
+    font-size: {FS_META}px;
+}}
+QLabel#StatValue {{
+    color: {TEXT_HI};
+    font-size: 22px;
+    font-weight: 650;
+    letter-spacing: -0.4px;
+}}
+QLabel#StatLabel {{
+    color: {TEXT_DIM};
+    font-size: {FS_CAPS}px;
+    font-weight: 650;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}}
+QLabel#StatusDotIdle,
+QLabel#StatusDotRunning,
+QLabel#StatusDotDone,
+QLabel#StatusDotError {{
+    font-size: {FS_META}px;
+    font-weight: 700;
+}}
+QLabel#StatusDotIdle {{ color: {DOT_IDLE}; }}
+QLabel#StatusDotRunning {{ color: {DOT_RUNNING}; }}
+QLabel#StatusDotDone {{ color: {DOT_DONE}; }}
+QLabel#StatusDotError {{ color: {DOT_ERROR}; }}
+QLineEdit#CommandInput {{
+    min-height: 42px;
+    border-radius: 8px;
+    padding: {S2}px {S4}px;
+    font-size: {FS_TITLE}px;
+}}
+QFrame#HeroCard {{
+    background: {ELEV_2};
+    border: 1px solid {BORDER_HI};
+    border-radius: 12px;
+}}
+
 /* ---------------- Status pills (dot + text, no chip) ---------------- */
 QLabel#WorkerStatusIdle,
 QLabel#WorkerStatusRunning,

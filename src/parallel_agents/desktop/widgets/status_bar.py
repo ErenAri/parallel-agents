@@ -20,7 +20,7 @@ def make_project_label() -> QLabel:
 
 
 def make_run_label() -> QLabel:
-    label = QLabel("·")
+    label = QLabel("Run: -")
     label.setObjectName("StatusItem")
     return label
 

@@ -215,6 +215,9 @@ parallel-agents office artifacts --project ./my-project
 ```
 
 Desktop Office (`parallel-agents-desktop`) now includes:
+- Command Center landing page with a project/gateway/model top bar
+- launch-ready command input for starting a run from the home screen
+- run cockpit cards for state, active workers, tokens, cost, and live pipeline status
 - project home summary with recent project picker
 - workspace doctor status signal (healthy/attention + warning/failure counts)
 - first-run onboarding action for workspace setup, model readiness, and GitHub readiness

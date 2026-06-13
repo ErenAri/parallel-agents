@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from parallel_agents import __version__
 from parallel_agents.desktop._qt import (
     QFrame,
     QLabel,
@@ -22,7 +23,7 @@ class Sidebar(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        header = QLabel("PARALLEL AGENTS")
+        header = QLabel("PARALLEL AGENTS OFFICE")
         header.setObjectName("SidebarHeader")
         layout.addWidget(header)
 
@@ -39,7 +40,7 @@ class Sidebar(QFrame):
             QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         )
 
-        footer = QLabel("v0.4.2 · local")
+        footer = QLabel(f"v{__version__} · local")
         footer.setObjectName("SidebarHeader")
         layout.addWidget(footer)
 
@@ -47,3 +48,9 @@ class Sidebar(QFrame):
         for k, btn in self._buttons.items():
             btn.setChecked(k == key)
         self.section_selected.emit(key)
+
+    def current_label(self) -> str:
+        for button in self._buttons.values():
+            if button.isChecked():
+                return button.text()
+        return "Command Center"
