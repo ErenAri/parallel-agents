@@ -75,7 +75,7 @@ from parallel_agents.company_policy import (
     validate_issue_plan_against_policy,
 )
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 __all__ = [
     "__version__",
