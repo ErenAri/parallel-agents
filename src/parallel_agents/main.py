@@ -8,6 +8,9 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,7 +23,11 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from parallel_agents.config import PipelineConfig
+from parallel_agents.config import (
+    DEFAULT_ARTIFACT_DIR,
+    PipelineConfig,
+    migrate_legacy_artifact_dir,
+)
 from parallel_agents.eval_harness import (
     EvaluationAnnotationUpdate,
     apply_evaluation_annotations,
@@ -71,6 +78,7 @@ from parallel_agents.company_policy import (
 )
 from parallel_agents.evidence_store import create_evidence_store
 from parallel_agents.models import FinalOutput
+from parallel_agents.onboarding import build_onboarding_report
 from parallel_agents.patch_tools import apply_unified_diff
 from parallel_agents.pipeline import Pipeline
 from parallel_agents.project_office import (
@@ -106,6 +114,19 @@ from parallel_agents.tools.github_tools import (
 )
 
 console = Console()
+
+DEFAULT_GATEWAY_URL = "http://127.0.0.1:8733"
+
+
+def output_dir_option(func):
+    """Shared --output-dir option pinned to the single unified workspace root."""
+    return click.option(
+        "--output-dir",
+        default=DEFAULT_ARTIFACT_DIR,
+        show_default=True,
+        help="Artifact output directory for run-linked data.",
+    )(func)
+
 
 EXIT_SUCCESS = 0
 EXIT_RUNTIME_FAILURE = 1
@@ -1376,7 +1397,7 @@ def company_group() -> None:
     help="Optional output path for generated brief JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_idea(
     idea: str,
@@ -1426,7 +1447,7 @@ def company_idea(
     help="Optional output path for generated PR/FAQ JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_prfaq(
     brief_path: Path,
@@ -1480,7 +1501,7 @@ def company_prfaq(
     help="Optional output path for generated stack decision JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_stack(
     repo: Path,
@@ -1536,7 +1557,7 @@ def company_stack(
     help="Optional output path for generated RFC JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_rfc(
     brief_path: Path,
@@ -1594,7 +1615,7 @@ def company_rfc(
     help="Optional output path for generated roadmap JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_roadmap(
     brief_path: Path,
@@ -1648,7 +1669,7 @@ def company_roadmap(
     help="Optional output path for generated release readiness JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_release_check(
     repo: Path,
@@ -1698,7 +1719,7 @@ def company_release_check(
     help="Optional output path for generated sprint plan JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_sprint(
     roadmap_path: Path,
@@ -1757,7 +1778,7 @@ def company_sprint(
     help="Optional output path for post-release review JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_post_release(
     release_id: str,
@@ -1818,7 +1839,7 @@ def company_post_release(
     help="Optional output path for GitHub workflow templates JSON.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_templates(
     roadmap_path: Path | None,
@@ -1867,7 +1888,7 @@ def company_templates(
 )
 @click.option("--dry-run/--no-dry-run", default=True, show_default=True, help="Preview operations without GitHub writes.")
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print sync result as JSON.")
 def company_sync_labels(
     repo_ref: str,
@@ -1951,7 +1972,7 @@ def company_sync_labels(
 )
 @click.option("--dry-run/--no-dry-run", default=True, show_default=True, help="Preview operations without GitHub writes.")
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print sync result as JSON.")
 def company_sync_milestones(
     repo_ref: str,
@@ -2054,7 +2075,7 @@ def company_branch_name(
     type=click.Path(path_type=Path),
     help="Optional output path for generated PR summary Markdown.",
 )
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
 def company_pr_summary(
     run_id: str,
@@ -2100,7 +2121,7 @@ def company_pr_summary(
     show_default=True,
     help="Artifact to enrich with PR link metadata.",
 )
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
 def company_pr_link(
     run_id: str,
@@ -2163,7 +2184,7 @@ def company_pr_link(
 @click.option("--title", default=None, help="Optional PR title.")
 @click.option("--artifact", "artifact_name", default="issue-plan", show_default=True, help="Artifact to enrich with PR link metadata.")
 @click.option("--draft/--no-draft", default=True, show_default=True, help="Create draft PR.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
 def company_pr_create(
     run_id: str,
@@ -2328,7 +2349,7 @@ def company_pr_create(
     show_default=True,
     help="Which comment payloads to post.",
 )
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print payload as JSON.")
 def company_pr_comment(
     run_id: str,
@@ -2498,7 +2519,7 @@ def company_pr_comment(
     help="Optional policy JSON file to constrain apply-time GitHub writes.",
 )
 @click.option("--run-id", default=None, help="Optional run ID for artifact linking.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_plan(
     roadmap_path: Path,
@@ -2601,7 +2622,7 @@ def company_plan(
 @click.option("--artifact", "artifact_name", default="issue-plan", show_default=True, help="Artifact name to approve.")
 @click.option("--approver", default=None, help="Optional approver identity.")
 @click.option("--approval-note", default=None, help="Optional note captured in immutable approval audit log.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_approve(
     run_id: str,
@@ -2684,7 +2705,7 @@ def company_approve(
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help="Optional policy JSON file. Overrides policy embedded in the artifact.",
 )
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact as JSON.")
 def company_apply(
     run_id: str,
@@ -2784,7 +2805,7 @@ def company_apply(
 
 @company_group.command(name="artifacts")
 @click.option("--run-id", required=True, help="Run ID to inspect.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Artifact output directory for run-linked data.")
+@output_dir_option
 @click.option("--json-output/--no-json-output", default=False, help="Print artifact map as JSON.")
 def company_artifacts(run_id: str, output_dir: str, json_output: bool) -> None:
     """List run-linked company artifacts."""
@@ -2843,6 +2864,133 @@ def office_init(project_path: Path, name: str | None, json_output: bool) -> None
         title="Project Office Initialized",
         border_style="green",
     ))
+
+
+@office_group.command(name="onboard")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to prepare for first use.",
+)
+@click.option("--name", default=None, help="Optional project display name.")
+@click.option(
+    "--fix-setup/--no-fix-setup",
+    default=True,
+    show_default=True,
+    help="Create/repair the local .parallel-agents workspace before reporting readiness.",
+)
+@click.option(
+    "--check-github-auth/--skip-github-auth-check",
+    default=True,
+    show_default=True,
+    help="Run `gh auth status` when GitHub CLI is available.",
+)
+@click.option(
+    "--strict/--no-strict",
+    default=False,
+    show_default=True,
+    help="Exit non-zero until local model-backed runs are ready.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print onboarding report as JSON.")
+def office_onboard(
+    project_path: Path,
+    name: str | None,
+    fix_setup: bool,
+    check_github_auth: bool,
+    strict: bool,
+    json_output: bool,
+) -> None:
+    """Prepare a project for the local desktop/CLI/GitHub workflow."""
+    payload = build_onboarding_report(
+        project_path,
+        name=name,
+        fix_setup=fix_setup,
+        check_github_auth=check_github_auth,
+    )
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        status = str(payload.get("status", "unknown"))
+        border_style = "green" if status == "ready" else ("yellow" if status.startswith("needs_") else "red")
+        console.print(
+            Panel(
+                "\n".join(
+                    [
+                        f"Status: {status}",
+                        f"Project root: {payload['project_root']}",
+                        f"Ready for local run: {payload['ready_for_local_run']}",
+                        f"Ready for GitHub flow: {payload['ready_for_github_flow']}",
+                        f"Actions taken: {', '.join(payload['actions_taken']) or 'none'}",
+                    ]
+                ),
+                title="Office Onboarding",
+                border_style=border_style,
+            )
+        )
+
+        readiness = Table(title="Readiness")
+        readiness.add_column("Area")
+        readiness.add_column("Status")
+        readiness.add_column("Detail")
+        after = payload.get("after") or {}
+        readiness.add_row(
+            "workspace",
+            "passed" if not payload.get("blocking_failures") else "failed",
+            f"{after.get('passed_checks', 0)} passed, {after.get('warning_checks', 0)} warnings, {after.get('failed_checks', 0)} failures",
+        )
+        for area in ("llm", "github"):
+            item = payload.get(area) or {}
+            readiness.add_row(area, str(item.get("status", "unknown")), str(item.get("detail", "")))
+        console.print(readiness)
+
+        next_actions = payload.get("next_actions") or []
+        if next_actions:
+            actions_table = Table(title="Next Actions")
+            actions_table.add_column("Step")
+            actions_table.add_column("Command")
+            for item in next_actions:
+                actions_table.add_row(str(item.get("label", "")), str(item.get("command", "")))
+            console.print(actions_table)
+
+    if strict and not bool(payload.get("ready_for_local_run")):
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+
+@office_group.command(name="migrate")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to migrate.",
+)
+@click.option("--json-output/--no-json-output", default=False, help="Print the result as JSON.")
+def office_migrate(project_path: Path, json_output: bool) -> None:
+    """Move a legacy .parallel-agents-output workspace onto the unified root.
+
+    Safe and explicit: only renames when the legacy directory exists and the
+    unified .parallel-agents directory does not. Never merges or overwrites.
+    """
+    result = migrate_legacy_artifact_dir(project_path)
+    if json_output:
+        click.echo(json.dumps(result, indent=2, default=str))
+    elif result.get("migrated"):
+        console.print(
+            f"Migrated workspace: {result['legacy']} -> {result['target']}",
+            style="green",
+        )
+    elif result.get("reason") == "no-legacy-dir":
+        console.print("Nothing to migrate: no legacy .parallel-agents-output found.")
+    elif result.get("reason") == "target-exists":
+        console.print(
+            "Refusing to migrate: .parallel-agents already exists. Merge manually.",
+            style="yellow",
+        )
+        sys.exit(EXIT_RUNTIME_FAILURE)
 
 
 @office_group.command(name="status")
@@ -3103,6 +3251,82 @@ def office_home(project_path: Path, json_output: bool) -> None:
     else:
         memory_table.add_row("-", "No memory entries found", "-")
     console.print(memory_table)
+
+
+@office_group.command(name="audit-verify")
+@click.option(
+    "--project",
+    "project_path",
+    default=".",
+    type=click.Path(file_okay=False, path_type=Path),
+    show_default=True,
+    help="Project folder to inspect.",
+)
+@click.option("--run-id", default=None, help="Optional run id. If omitted, verify every run.")
+@click.option("--json-output/--no-json-output", default=False, help="Print the verification report as JSON.")
+def office_audit_verify(project_path: Path, run_id: str | None, json_output: bool) -> None:
+    """Recompute the workspace audit hash-chains and report any tampering.
+
+    Exits non-zero if any chain is broken, so CI/release checks can gate on it.
+    """
+    from parallel_agents.company_artifacts import (
+        verify_hash_chain,
+        verify_run_audit_chains,
+    )
+    from parallel_agents.project_office import office_dir, office_output_dir
+
+    _resolve_initialized_office(project_path)
+    central = verify_hash_chain(
+        office_dir(project_path) / "audit" / "events.jsonl", "governance-log"
+    )
+    target_runs = [run_id] if run_id else list_office_run_ids(project_path)
+    try:
+        run_reports = [
+            verify_run_audit_chains(office_output_dir(project_path), rid)
+            for rid in target_runs
+        ]
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+    all_ok = central.ok and all(r.ok for r in run_reports)
+
+    if json_output:
+        click.echo(
+            json.dumps(
+                {
+                    "ok": all_ok,
+                    "governance_log": {"ok": central.ok, "entries": central.entry_count, "reason": central.reason},
+                    "runs": [
+                        {
+                            "run_id": r.run_id,
+                            "ok": r.ok,
+                            "chains": [
+                                {"artifact": c.artifact_name, "ok": c.ok, "entries": c.entry_count, "reason": c.reason}
+                                for c in r.chains
+                            ],
+                        }
+                        for r in run_reports
+                    ],
+                },
+                indent=2,
+            )
+        )
+    else:
+        table = Table(title="Audit Chain Verification")
+        table.add_column("Scope")
+        table.add_column("Status")
+        table.add_column("Entries", justify="right")
+        gov_status = "OK" if central.ok else f"BROKEN ({central.reason})"
+        table.add_row("governance-log", gov_status, str(central.entry_count))
+        for r in run_reports:
+            for c in r.chains:
+                status = "OK" if c.ok else f"BROKEN ({c.reason})"
+                table.add_row(f"{r.run_id}/{c.artifact_name}", status, str(c.entry_count))
+        console.print(table)
+        console.print(f"\nOverall: {'OK' if all_ok else 'TAMPERING DETECTED'}")
+
+    if not all_ok:
+        sys.exit(EXIT_RUNTIME_FAILURE)
 
 
 @office_group.command(name="artifacts")
@@ -3444,7 +3668,7 @@ def gateway_group() -> None:
 @gateway_group.command(name="start")
 @click.option("--host", default="127.0.0.1", show_default=True, help="Host address to bind.")
 @click.option("--port", default=8733, type=int, show_default=True, help="Port to bind.")
-@click.option("--output-dir", default=".parallel-agents-output", show_default=True, help="Gateway state and artifact directory.")
+@click.option("--output-dir", default=DEFAULT_ARTIFACT_DIR, show_default=True, help="Gateway state and artifact directory.")
 @click.option(
     "--api-key",
     default=None,
@@ -3471,6 +3695,17 @@ def gateway_group() -> None:
     show_default=True,
     help="Allow write-class MCP tools over gateway /mcp endpoints.",
 )
+@click.option(
+    "--slack-signing-secret",
+    default=None,
+    help="Optional Slack signing secret. If omitted, PA_GATEWAY_SLACK_SIGNING_SECRET from env is used.",
+)
+@click.option(
+    "--allow-unsigned-slack/--no-allow-unsigned-slack",
+    default=False,
+    show_default=True,
+    help="Allow unsigned Slack events for local tunnel/testing only.",
+)
 def gateway_start(
     host: str,
     port: int,
@@ -3480,6 +3715,8 @@ def gateway_start(
     jwt_issuer: str | None,
     jwt_audience: str | None,
     allow_remote_write_tools: bool,
+    slack_signing_secret: str | None,
+    allow_unsigned_slack: bool,
 ) -> None:
     """Start the local gateway HTTP server."""
     try:
@@ -3498,16 +3735,189 @@ def gateway_start(
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             allow_remote_write_tools=allow_remote_write_tools,
+            slack_signing_secret=slack_signing_secret,
+            slack_allow_unsigned=allow_unsigned_slack,
         )
     except Exception as exc:
         click.echo(f"Failed to start gateway: {exc}", err=True)
         sys.exit(EXIT_RUNTIME_FAILURE)
 
 
+@gateway_group.group(name="channel")
+def gateway_channel_group() -> None:
+    """Operate the local gateway channel pairing adapter."""
+    pass
+
+
+@gateway_channel_group.command(name="inbound")
+@click.option("--gateway-url", default=DEFAULT_GATEWAY_URL, show_default=True, help="Gateway base URL.")
+@click.option("--api-key", default=None, help="Gateway API key, or PA_GATEWAY_API_KEY from env.")
+@click.option("--channel", required=True, help="Channel adapter name, e.g. slack, discord, webhook.")
+@click.option("--peer-id", required=True, help="Sender/user/conversation identifier.")
+@click.option("--message", default="", help="Inbound message text.")
+@click.option("--repo-path", default=None, help="Repository path to pass to the pipeline when executing.")
+@click.option(
+    "--permission-mode",
+    default="plan",
+    show_default=True,
+    help="Pipeline permission mode when executing.",
+)
+@click.option("--execute/--no-execute", default=False, show_default=True, help="Enqueue a run after pairing.")
+@click.option("--wait/--no-wait", default=False, show_default=True, help="Wait for an executed run to finish.")
+@click.option("--json-output/--no-json-output", default=False, help="Print raw JSON.")
+def gateway_channel_inbound(
+    gateway_url: str,
+    api_key: str | None,
+    channel: str,
+    peer_id: str,
+    message: str,
+    repo_path: str | None,
+    permission_mode: str,
+    execute: bool,
+    wait: bool,
+    json_output: bool,
+) -> None:
+    """Submit a local inbound channel message to the gateway adapter."""
+    payload = {
+        "channel": channel,
+        "peer_id": peer_id,
+        "message": message,
+        "repo_path": repo_path,
+        "permission_mode": permission_mode,
+        "execute": execute,
+        "wait": wait,
+    }
+    try:
+        result = _gateway_http_json(
+            gateway_url,
+            "POST",
+            "/channels/inbound",
+            payload,
+            api_key=api_key,
+        )
+    except Exception as exc:
+        click.echo(f"Gateway channel inbound failed: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if json_output:
+        click.echo(json.dumps(result, indent=2, default=str))
+        return
+
+    status = str(result.get("status", "unknown"))
+    border_style = "green" if status == "accepted" else "yellow"
+    lines = [
+        f"Status: {status}",
+        f"Channel: {result.get('channel', channel)}",
+        f"Peer: {result.get('peer_id', peer_id)}",
+        f"Processed: {result.get('processed', False)}",
+    ]
+    if result.get("pairing_code"):
+        lines.append(f"Pairing code: {result['pairing_code']}")
+        lines.append(f"Expires: {result.get('expires_at', '-')}")
+        lines.append(
+            "Approve: "
+            f"parallel-agents gateway channel approve --code {result['pairing_code']}"
+        )
+    run = result.get("run")
+    if isinstance(run, dict):
+        lines.append(f"Run: {run.get('id', '-')}")
+        lines.append(f"Run status: {run.get('status', '-')}")
+    console.print(Panel("\n".join(lines), title="Channel Inbound", border_style=border_style))
+
+
+@gateway_channel_group.command(name="approve")
+@click.option("--gateway-url", default=DEFAULT_GATEWAY_URL, show_default=True, help="Gateway base URL.")
+@click.option("--api-key", default=None, help="Gateway API key, or PA_GATEWAY_API_KEY from env.")
+@click.option("--code", required=True, help="Pairing code to approve.")
+@click.option("--approved-by", default="operator", show_default=True, help="Local approver label.")
+@click.option("--json-output/--no-json-output", default=False, help="Print raw JSON.")
+def gateway_channel_approve(
+    gateway_url: str,
+    api_key: str | None,
+    code: str,
+    approved_by: str,
+    json_output: bool,
+) -> None:
+    """Approve a pending channel pairing code."""
+    try:
+        result = _gateway_http_json(
+            gateway_url,
+            "POST",
+            "/channels/pairing/approve",
+            {"code": code, "approved_by": approved_by},
+            api_key=api_key,
+        )
+    except Exception as exc:
+        click.echo(f"Gateway channel approval failed: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if json_output:
+        click.echo(json.dumps(result, indent=2, default=str))
+        return
+
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"Status: {result.get('status', 'unknown')}",
+                    f"Channel: {result.get('channel', '-')}",
+                    f"Peer: {result.get('peer_id', '-')}",
+                    f"Approved by: {result.get('approved_by', approved_by)}",
+                    f"Approved at: {result.get('approved_at', '-')}",
+                ]
+            ),
+            title="Channel Pairing",
+            border_style="green",
+        )
+    )
+
+
+@gateway_channel_group.command(name="peers")
+@click.option("--gateway-url", default=DEFAULT_GATEWAY_URL, show_default=True, help="Gateway base URL.")
+@click.option("--api-key", default=None, help="Gateway API key, or PA_GATEWAY_API_KEY from env.")
+@click.option("--channel", default=None, help="Optional channel filter.")
+@click.option("--json-output/--no-json-output", default=False, help="Print raw JSON.")
+def gateway_channel_peers(
+    gateway_url: str,
+    api_key: str | None,
+    channel: str | None,
+    json_output: bool,
+) -> None:
+    """List approved channel peers."""
+    path = "/channels/peers"
+    if channel:
+        path += "?" + urllib.parse.urlencode({"channel": channel})
+    try:
+        result = _gateway_http_json(gateway_url, "GET", path, api_key=api_key)
+    except Exception as exc:
+        click.echo(f"Gateway channel peers failed: {exc}", err=True)
+        sys.exit(EXIT_RUNTIME_FAILURE)
+
+    if json_output:
+        click.echo(json.dumps(result, indent=2, default=str))
+        return
+
+    table = Table(title="Approved Channel Peers")
+    table.add_column("Channel")
+    table.add_column("Peer")
+    table.add_column("Approved At")
+    table.add_column("Approved By")
+    for peer in result.get("peers", []):
+        if not isinstance(peer, dict):
+            continue
+        table.add_row(
+            str(peer.get("channel", "")),
+            str(peer.get("peer_id", "")),
+            str(peer.get("approved_at", "")),
+            str(peer.get("approved_by", "")),
+        )
+    console.print(table)
+
+
 @cli.command()
 @click.argument("run_id")
 @click.option("--store", "-s", type=click.Choice(["file", "sqlite"]), default="file")
-@click.option("--output-dir", default=".parallel-agents-output")
+@click.option("--output-dir", default=DEFAULT_ARTIFACT_DIR)
 def show(run_id: str, store: str, output_dir: str) -> None:
     """View results of a previous run."""
     evidence_store = create_evidence_store(output_dir, run_id, store)
@@ -3545,7 +3955,7 @@ def show(run_id: str, store: str, output_dir: str) -> None:
 
 @cli.command()
 @click.option("--store", "-s", type=click.Choice(["file", "sqlite"]), default="file")
-@click.option("--output-dir", default=".parallel-agents-output")
+@click.option("--output-dir", default=DEFAULT_ARTIFACT_DIR)
 def history(store: str, output_dir: str) -> None:
     """List previous runs."""
     if store == "sqlite":
@@ -3831,6 +4241,44 @@ def _attach_run_metadata(
             if isinstance(entry, dict):
                 entry["run_id"] = run_id
                 entry["artifact_name"] = artifact_name
+
+
+def _gateway_http_json(
+    gateway_url: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    api_key: str | None = None,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    url = f"{gateway_url.rstrip('/')}/{path.lstrip('/')}"
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    resolved_key = api_key or os.environ.get("PA_GATEWAY_API_KEY")
+    if resolved_key:
+        headers["X-PA-API-Key"] = resolved_key
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method.upper(),
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gateway HTTP {exc.code}: {detail}") from exc
+    if not body.strip():
+        return {}
+    parsed = json.loads(body)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Gateway returned a non-object JSON response.")
+    return parsed
 
 
 def _fmt_percent(value: float | None) -> str:

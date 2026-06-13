@@ -1897,6 +1897,8 @@ def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
         jwt_issuer,
         jwt_audience,
         allow_remote_write_tools,
+        slack_signing_secret,
+        slack_allow_unsigned,
     ):
         captured["host"] = host
         captured["port"] = port
@@ -1906,6 +1908,8 @@ def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
         captured["jwt_issuer"] = jwt_issuer
         captured["jwt_audience"] = jwt_audience
         captured["allow_remote_write_tools"] = allow_remote_write_tools
+        captured["slack_signing_secret"] = slack_signing_secret
+        captured["slack_allow_unsigned"] = slack_allow_unsigned
 
     import parallel_agents.gateway as gateway_module
 
@@ -1925,6 +1929,8 @@ def test_gateway_start_uses_localhost_default(monkeypatch, tmp_path):
     assert captured["jwt_issuer"] is None
     assert captured["jwt_audience"] is None
     assert captured["allow_remote_write_tools"] is False
+    assert captured["slack_signing_secret"] is None
+    assert captured["slack_allow_unsigned"] is False
 
 
 def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
@@ -1940,6 +1946,8 @@ def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
         jwt_issuer,
         jwt_audience,
         allow_remote_write_tools,
+        slack_signing_secret,
+        slack_allow_unsigned,
     ):
         captured["host"] = host
         captured["port"] = port
@@ -1949,6 +1957,8 @@ def test_gateway_start_passes_api_key(monkeypatch, tmp_path):
         captured["jwt_issuer"] = jwt_issuer
         captured["jwt_audience"] = jwt_audience
         captured["allow_remote_write_tools"] = allow_remote_write_tools
+        captured["slack_signing_secret"] = slack_signing_secret
+        captured["slack_allow_unsigned"] = slack_allow_unsigned
 
     import parallel_agents.gateway as gateway_module
 
@@ -1981,6 +1991,8 @@ def test_gateway_start_passes_jwt_options(monkeypatch, tmp_path):
         jwt_issuer,
         jwt_audience,
         allow_remote_write_tools,
+        slack_signing_secret,
+        slack_allow_unsigned,
     ):
         captured["host"] = host
         captured["port"] = port
@@ -1990,6 +2002,8 @@ def test_gateway_start_passes_jwt_options(monkeypatch, tmp_path):
         captured["jwt_issuer"] = jwt_issuer
         captured["jwt_audience"] = jwt_audience
         captured["allow_remote_write_tools"] = allow_remote_write_tools
+        captured["slack_signing_secret"] = slack_signing_secret
+        captured["slack_allow_unsigned"] = slack_allow_unsigned
 
     import parallel_agents.gateway as gateway_module
 
@@ -2031,6 +2045,8 @@ def test_gateway_start_passes_remote_write_option(monkeypatch, tmp_path):
         jwt_issuer,
         jwt_audience,
         allow_remote_write_tools,
+        slack_signing_secret,
+        slack_allow_unsigned,
     ):
         captured["host"] = host
         captured["port"] = port
@@ -2040,6 +2056,8 @@ def test_gateway_start_passes_remote_write_option(monkeypatch, tmp_path):
         captured["jwt_issuer"] = jwt_issuer
         captured["jwt_audience"] = jwt_audience
         captured["allow_remote_write_tools"] = allow_remote_write_tools
+        captured["slack_signing_secret"] = slack_signing_secret
+        captured["slack_allow_unsigned"] = slack_allow_unsigned
 
     import parallel_agents.gateway as gateway_module
 
@@ -2058,6 +2076,181 @@ def test_gateway_start_passes_remote_write_option(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert captured["allow_remote_write_tools"] is True
+
+
+def test_gateway_start_passes_slack_options(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def fake_run_gateway_server(
+        *,
+        host,
+        port,
+        output_dir,
+        api_key,
+        jwt_secret,
+        jwt_issuer,
+        jwt_audience,
+        allow_remote_write_tools,
+        slack_signing_secret,
+        slack_allow_unsigned,
+    ):
+        captured["slack_signing_secret"] = slack_signing_secret
+        captured["slack_allow_unsigned"] = slack_allow_unsigned
+
+    import parallel_agents.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "run_gateway_server", fake_run_gateway_server)
+    runner = _runner()
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "gateway",
+            "start",
+            "--output-dir",
+            str(tmp_path),
+            "--slack-signing-secret",
+            "slack-secret",
+            "--allow-unsigned-slack",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["slack_signing_secret"] == "slack-secret"
+    assert captured["slack_allow_unsigned"] is True
+
+
+def test_gateway_channel_inbound_json(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_gateway_http_json(gateway_url, method, path, payload=None, *, api_key=None, timeout_seconds=15.0):
+        captured["gateway_url"] = gateway_url
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        captured["api_key"] = api_key
+        return {
+            "status": "pairing_required",
+            "processed": False,
+            "channel": "slack",
+            "peer_id": "U123",
+            "pairing_code": "ABC123",
+            "expires_at": "2026-06-13T12:00:00+00:00",
+        }
+
+    monkeypatch.setattr(main_module, "_gateway_http_json", fake_gateway_http_json)
+    runner = _runner()
+
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "gateway",
+            "channel",
+            "inbound",
+            "--gateway-url",
+            "http://localhost:9999",
+            "--api-key",
+            "secret",
+            "--channel",
+            "slack",
+            "--peer-id",
+            "U123",
+            "--message",
+            "Review this repo",
+            "--execute",
+            "--json-output",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["gateway_url"] == "http://localhost:9999"
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/channels/inbound"
+    assert captured["api_key"] == "secret"
+    payload = captured["payload"]
+    assert payload["channel"] == "slack"
+    assert payload["peer_id"] == "U123"
+    assert payload["message"] == "Review this repo"
+    assert payload["execute"] is True
+    output = json.loads(result.output)
+    assert output["pairing_code"] == "ABC123"
+
+
+def test_gateway_channel_approve_json(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_gateway_http_json(gateway_url, method, path, payload=None, *, api_key=None, timeout_seconds=15.0):
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {
+            "status": "approved",
+            "channel": "slack",
+            "peer_id": "U123",
+            "approved_at": "2026-06-13T12:00:00+00:00",
+            "approved_by": "operator",
+        }
+
+    monkeypatch.setattr(main_module, "_gateway_http_json", fake_gateway_http_json)
+    runner = _runner()
+
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "gateway",
+            "channel",
+            "approve",
+            "--code",
+            "ABC123",
+            "--approved-by",
+            "operator",
+            "--json-output",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/channels/pairing/approve"
+    assert captured["payload"] == {"code": "ABC123", "approved_by": "operator"}
+    assert json.loads(result.output)["status"] == "approved"
+
+
+def test_gateway_channel_peers_json(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_gateway_http_json(gateway_url, method, path, payload=None, *, api_key=None, timeout_seconds=15.0):
+        captured["method"] = method
+        captured["path"] = path
+        return {
+            "peers": [
+                {
+                    "channel": "slack",
+                    "peer_id": "U123",
+                    "approved_at": "2026-06-13T12:00:00+00:00",
+                    "approved_by": "operator",
+                }
+            ],
+            "count": 1,
+        }
+
+    monkeypatch.setattr(main_module, "_gateway_http_json", fake_gateway_http_json)
+    runner = _runner()
+
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "gateway",
+            "channel",
+            "peers",
+            "--channel",
+            "slack/team a",
+            "--json-output",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/channels/peers?channel=slack%2Fteam+a"
+    assert json.loads(result.output)["count"] == 1
 
 
 def test_release_verify_json_success(monkeypatch, tmp_path):
@@ -2514,3 +2707,57 @@ def test_office_memory_requires_initialized_workspace(tmp_path):
     )
     assert result.exit_code == main_module.EXIT_RUNTIME_FAILURE
     assert "Project office is not initialized" in result.output
+
+
+def test_office_onboard_json_initializes_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr("parallel_agents.project_office.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("parallel_agents.onboarding.shutil.which", lambda name: f"/usr/bin/{name}")
+    runner = _runner()
+
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "onboard",
+            "--project",
+            str(tmp_path),
+            "--name",
+            "Demo Office",
+            "--skip-github-auth-check",
+            "--json-output",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["project_root"] == str(tmp_path)
+    assert payload["llm"]["status"] == "passed"
+    assert payload["ready_for_local_run"] is True
+    assert (tmp_path / ".parallel-agents" / "project.json").exists()
+    assert any(item["label"] == "Run first safe analysis" for item in payload["next_actions"])
+
+
+def test_office_onboard_strict_fails_without_model_auth(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("PA_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr("parallel_agents.project_office.shutil.which", lambda name: None if name == "claude" else "tool")
+    monkeypatch.setattr("parallel_agents.onboarding.shutil.which", lambda name: None if name == "claude" else "tool")
+    runner = _runner()
+
+    result = runner.invoke(
+        main_module.cli,
+        [
+            "office",
+            "onboard",
+            "--project",
+            str(tmp_path),
+            "--skip-github-auth-check",
+            "--strict",
+            "--json-output",
+        ],
+    )
+
+    assert result.exit_code == main_module.EXIT_RUNTIME_FAILURE
+    payload = json.loads(result.output)
+    assert payload["status"] == "needs_model_auth"

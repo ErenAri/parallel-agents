@@ -128,7 +128,7 @@ async def _mock_query_generator(response_text: str):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_end_to_end():
+async def test_pipeline_end_to_end(tmp_path):
     """Test full pipeline with mocked query() calls."""
     config = PipelineConfig(
         workers={
@@ -143,6 +143,7 @@ async def test_pipeline_end_to_end():
             "docs": WorkerConfig(enabled=False),
         },
         store_backend="file",
+        output_dir=str(tmp_path),
     )
 
     responses = [
@@ -166,6 +167,7 @@ async def test_pipeline_end_to_end():
 
     mock_fn = make_mock_query()
     statuses: list[str] = []
+    events: list[dict] = []
 
     with patch("parallel_agents.agents.planner.query", new=mock_fn):
         with patch("parallel_agents.agents.base.query", new=mock_fn):
@@ -175,16 +177,28 @@ async def test_pipeline_end_to_end():
                     "Test the security and review",
                     repo_path="/tmp/mock-repo",
                     on_status=statuses.append,
+                    on_event=events.append,
+                    run_id="run-test",
                 )
 
     assert isinstance(result, FinalOutput)
     assert result.summary != ""
     assert len(statuses) > 0  # Progress callbacks were called
+    assert any(
+        event.get("agent") == "pipeline"
+        and event.get("phase") == "planning"
+        and event.get("status") == "started"
+        for event in events
+    )
+    assert any(event.get("agent") == "security" for event in events)
 
     # Check cost tracking was recorded
     assert "cost" in result.metadata
+    assert result.metadata["run_id"] == "run-test"
     cost = result.metadata["cost"]
     assert cost["total_tokens"] >= 0
+    final_payload = json.loads((tmp_path / "run-test" / "final_output.json").read_text(encoding="utf-8"))
+    assert final_payload["metadata"]["run_id"] == "run-test"
 
 
 @pytest.mark.asyncio
@@ -376,6 +390,87 @@ async def test_pipeline_suppresses_invalid_judge_patch():
     assert result.patch is None
     assert result.metadata["patch_validation"]["valid"] is False
     assert "invalid_patch" in result.metadata
+
+
+@pytest.mark.asyncio
+async def test_pipeline_planner_parse_failure_marks_run_failed(tmp_path):
+    """A planner that never parses must yield a FAILED manifest and a parse-failure
+    summary (so the CLI exits non-zero), not a COMPLETED empty run."""
+    from parallel_agents.evidence_store import create_evidence_store
+    from parallel_agents.main import _classify_result_exit_code, EXIT_PARSE_FAILURE
+    from parallel_agents.models import TaskStatus
+
+    config = _single_review_config()
+    config.output_dir = str(tmp_path)
+    config.parse_retry_attempts = 1  # one retry, then give up
+
+    def mock_query(*, prompt, options=None):
+        return _mock_query_generator("this is never valid json")
+
+    with patch("parallel_agents.agents.planner.query", new=mock_query):
+        pipeline = Pipeline(config)
+        result = await pipeline.run("Review task", repo_path="/tmp/mock-repo")
+
+    assert "failed to parse" in result.summary.lower()
+    assert result.metadata.get("error") == "planner_parse_failure"
+    assert _classify_result_exit_code(result) == EXIT_PARSE_FAILURE
+
+    run_id = result.metadata["run_id"]
+    store = create_evidence_store(config.output_dir, run_id, config.store_backend)
+    manifest = store.load_manifest()
+    assert manifest is not None
+    assert manifest.status == TaskStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_pipeline_preserves_multiple_subtasks_per_worker(tmp_path):
+    """Two subtasks assigned to the same worker must both survive (no silent
+    overwrite by worker_name) in worker_results and in the evidence store."""
+    from parallel_agents.evidence_store import create_evidence_store
+
+    config = _single_review_config()
+    config.output_dir = str(tmp_path)
+
+    planner = json.dumps({
+        "summary": "Two review subtasks",
+        "repo_analysis": {"languages": ["python"]},
+        "subtasks": [
+            {"id": "s1", "description": "Review module A", "assigned_worker": "review",
+             "context": {}, "dependencies": [], "priority": 1},
+            {"id": "s2", "description": "Review module B", "assigned_worker": "review",
+             "context": {}, "dependencies": [], "priority": 1},
+        ],
+        "global_context": {"repo_path": "/tmp/mock-repo"},
+    })
+    responses = [
+        planner,
+        _mock_worker_response("review"),
+        _mock_worker_response("review"),
+        _mock_judge_response(),
+    ]
+    counter = {"n": 0}
+
+    def mock_query(*, prompt, options=None):
+        idx = min(counter["n"], len(responses) - 1)
+        counter["n"] += 1
+        return _mock_query_generator(responses[idx])
+
+    with patch("parallel_agents.agents.planner.query", new=mock_query):
+        with patch("parallel_agents.agents.base.query", new=mock_query):
+            with patch("parallel_agents.agents.judge.query", new=mock_query):
+                pipeline = Pipeline(config)
+                result = await pipeline.run("Review task", repo_path="/tmp/mock-repo")
+
+    # Both subtask results are preserved (keyed distinctly), not collapsed to one.
+    assert len(result.worker_results) == 2
+    subtask_ids = {r.subtask_id for r in result.worker_results.values()}
+    assert subtask_ids == {"s1", "s2"}
+
+    run_id = result.metadata["run_id"]
+    store = create_evidence_store(config.output_dir, run_id, config.store_backend)
+    stored = store.load_all_worker_results()
+    assert len(stored) == 2
+    assert {r.subtask_id for r in stored.values()} == {"s1", "s2"}
 
 
 @pytest.mark.asyncio

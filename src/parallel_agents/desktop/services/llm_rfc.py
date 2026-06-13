@@ -1,4 +1,4 @@
-"""LLM-backed Architecture RFC generation. Falls back to deterministic on any error."""
+"""LLM-backed Architecture RFC generation via structured tool-use output."""
 
 from __future__ import annotations
 
@@ -8,23 +8,26 @@ from parallel_agents.company_workflows import (
     TechStackDecision,
     build_architecture_rfc,
 )
-from parallel_agents.desktop.services.llm import call_anthropic, extract_json
+from parallel_agents.desktop.services.llm import call_anthropic_tool, str_list, text_or
 
-PROMPT_TEMPLATE = """You are the architecture agent in an AI software office.
+_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "context": {"type": "string"},
+        "decision": {"type": "string"},
+        "alternatives": {"type": "array", "items": {"type": "string"}},
+        "tradeoffs": {"type": "array", "items": {"type": "string"}},
+        "security_considerations": {"type": "array", "items": {"type": "string"}},
+        "rollout_plan": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["title", "context", "decision"],
+}
 
-Draft an Architecture RFC informed by the ProductBrief and TechStackDecision
-below. Respond with a single JSON object matching this schema (no prose, no
-fences):
-
-{{
-  "title": str,
-  "context": str,                       # restate the problem and constraints
-  "decision": str,                      # 1-3 sentences, decisive
-  "alternatives": [str, ...],           # 2-4 alternatives considered
-  "tradeoffs": [str, ...],              # 2-4 honest tradeoffs of the chosen decision
-  "security_considerations": [str, ...],
-  "rollout_plan": [str, ...]            # 3-5 phased rollout steps
-}}
+_PROMPT = """You are the architecture agent in an AI software office.
+Draft an Architecture RFC informed by the ProductBrief and TechStackDecision.
+Be decisive in the decision field. 2-4 alternatives, 2-4 honest tradeoffs,
+3-5 phased rollout steps. Be specific to these inputs.
 
 ProductBrief JSON:
 {brief_json}
@@ -34,25 +37,30 @@ TechStackDecision JSON:
 """
 
 
-def generate_llm_rfc(brief: ProductBrief, stack: TechStackDecision) -> ArchitectureRFC:
-    raw = call_anthropic(
-        PROMPT_TEMPLATE.format(
+def generate_llm_rfc(
+    brief: ProductBrief, stack: TechStackDecision
+) -> tuple[ArchitectureRFC, str]:
+    payload, model = call_anthropic_tool(
+        _PROMPT.format(
             brief_json=brief.model_dump_json(indent=2),
             stack_json=stack.model_dump_json(indent=2),
         ),
-        max_tokens=2500,
+        tool_name="emit_architecture_rfc",
+        tool_description="Return the structured Architecture RFC.",
+        input_schema=_SCHEMA,
+        max_tokens=3000,
     )
-    payload = extract_json(raw)
     fallback = build_architecture_rfc(brief, stack)
-    return ArchitectureRFC(
+    rfc = ArchitectureRFC(
         id=fallback.id,
-        title=str(payload.get("title") or fallback.title),
-        context=str(payload.get("context") or fallback.context),
-        decision=str(payload.get("decision") or fallback.decision),
-        alternatives=list(payload.get("alternatives") or fallback.alternatives),
-        tradeoffs=list(payload.get("tradeoffs") or fallback.tradeoffs),
-        security_considerations=list(
-            payload.get("security_considerations") or fallback.security_considerations
+        title=text_or(payload.get("title"), fallback.title),
+        context=text_or(payload.get("context"), fallback.context),
+        decision=text_or(payload.get("decision"), fallback.decision),
+        alternatives=str_list(payload.get("alternatives"), fallback.alternatives),
+        tradeoffs=str_list(payload.get("tradeoffs"), fallback.tradeoffs),
+        security_considerations=str_list(
+            payload.get("security_considerations"), fallback.security_considerations
         ),
-        rollout_plan=list(payload.get("rollout_plan") or fallback.rollout_plan),
+        rollout_plan=str_list(payload.get("rollout_plan"), fallback.rollout_plan),
     )
+    return rfc, model

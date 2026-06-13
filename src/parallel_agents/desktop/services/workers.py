@@ -12,6 +12,7 @@ UI code never touches asyncio directly. Use:
 from __future__ import annotations
 
 import asyncio
+import traceback
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -36,4 +37,6 @@ class AsyncJob(QThread):
                 loop.close()
             self.finished_ok.emit(result)
         except Exception as exc:  # noqa: BLE001 - surface any failure to UI
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            self.failed.emit(
+                f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}"
+            )

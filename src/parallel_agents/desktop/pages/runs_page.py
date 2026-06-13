@@ -26,6 +26,7 @@ class RunsPage(Page):
         self.engine = engine
         self._job: AsyncJob | None = None
         self._active_workers: set[str] = set()
+        self._event_status_seen = False
 
         task_row = QHBoxLayout()
         task_row.addWidget(QLabel("Task:"))
@@ -67,6 +68,7 @@ class RunsPage(Page):
         for role in self.worker_grid.tiles:
             self.worker_grid.update_worker(role, "idle", "Waiting")
         self._active_workers.clear()
+        self._event_status_seen = False
         self.start_btn.setEnabled(False)
 
         async def _job():
@@ -74,7 +76,15 @@ class RunsPage(Page):
                 if self._job is not None:
                     self._job.progress.emit({"message": message})
 
-            return await self.engine.run_pipeline(task, on_status=_on_status)
+            def _on_event(event: dict) -> None:
+                if self._job is not None:
+                    self._job.progress.emit({"event": event})
+
+            return await self.engine.run_pipeline(
+                task,
+                on_status=_on_status,
+                on_event=_on_event,
+            )
 
         self._job = AsyncJob(_job)
         self._job.progress.connect(self._on_progress)
@@ -83,11 +93,18 @@ class RunsPage(Page):
         self._job.start()
 
     def _on_progress(self, payload: dict) -> None:
+        event = payload.get("event")
+        if isinstance(event, dict):
+            self._event_status_seen = True
+            self._apply_worker_status_from_event(event)
+            return
+
         message = str(payload.get("message", "")).strip()
         if not message:
             return
         self.activity.appendPlainText(message)
-        self._apply_worker_status_from_message(message)
+        if not self._event_status_seen:
+            self._apply_worker_status_from_message(message)
 
     def _on_finished(self, result) -> None:
         self.start_btn.setEnabled(True)
@@ -112,6 +129,79 @@ class RunsPage(Page):
             "Pipeline run could not complete. See details for the full error.",
             details=error,
         )
+
+    def _apply_worker_status_from_event(self, event: dict) -> None:
+        agent = str(event.get("agent") or "").strip()
+        phase = str(event.get("phase") or "").strip()
+        status = str(event.get("status") or "").strip()
+        event_name = str(event.get("event") or "").strip()
+
+        if agent == "pipeline":
+            if phase == "planning":
+                if status == "started":
+                    self.worker_grid.update_worker("planner", "running", "Planning")
+                elif status == "completed":
+                    subtask_count = event.get("subtask_count")
+                    detail = (
+                        f"Plan completed ({subtask_count} subtasks)"
+                        if subtask_count is not None
+                        else "Plan completed"
+                    )
+                    self.worker_grid.update_worker("planner", "done", detail)
+                return
+            if phase == "splitting" and status == "completed":
+                batch_count = event.get("batch_count")
+                detail = (
+                    f"Batches prepared ({batch_count})"
+                    if batch_count is not None
+                    else "Batches prepared"
+                )
+                self.worker_grid.update_worker("splitter", "done", detail)
+                return
+            if phase == "execution":
+                if status == "started":
+                    self.worker_grid.update_worker("splitter", "done", "Execution started")
+                    self._active_workers.clear()
+                    for role in _event_workers(event):
+                        if role in self.worker_grid.tiles:
+                            self.worker_grid.update_worker(role, "running", "Executing subtask")
+                            self._active_workers.add(role)
+                elif status == "completed":
+                    results = event.get("results") if isinstance(event.get("results"), dict) else {}
+                    for role, result_status in results.items():
+                        mapped = _worker_grid_status(str(result_status))
+                        self.worker_grid.update_worker(role, mapped, f"Result: {result_status}")
+                        self._active_workers.discard(str(role))
+                return
+            if phase == "judging":
+                if status == "started":
+                    for role in list(self._active_workers):
+                        if role in self.worker_grid.tiles:
+                            self.worker_grid.update_worker(role, "done", "Subtask complete")
+                    self._active_workers.clear()
+                    self.worker_grid.update_worker("judge", "running", "Merging results")
+                elif status == "completed":
+                    self.worker_grid.update_worker("judge", "done", "Final output saved")
+                return
+
+        if agent in self.worker_grid.tiles:
+            if event_name == "worker_started":
+                self.worker_grid.update_worker(agent, "running", "Executing subtask")
+                self._active_workers.add(agent)
+                return
+            if event_name == "worker_completed":
+                mapped = _worker_grid_status(status)
+                self.worker_grid.update_worker(agent, mapped, f"Result: {status or 'done'}")
+                self._active_workers.discard(agent)
+                return
+            if status:
+                mapped = _worker_grid_status(status)
+                findings = event.get("findings")
+                recommendations = event.get("recommendations")
+                detail = f"Result: {status}"
+                if findings is not None and recommendations is not None:
+                    detail = f"{status}: {findings} findings, {recommendations} recommendations"
+                self.worker_grid.update_worker(agent, mapped, detail)
 
     def _apply_worker_status_from_message(self, message: str) -> None:
         normalized = message.strip()
@@ -154,3 +244,19 @@ class RunsPage(Page):
             return
         if normalized.startswith("Done. Run ID:"):
             self.worker_grid.update_worker("judge", "done", "Final merge complete")
+
+
+def _event_workers(event: dict) -> list[str]:
+    workers = event.get("workers")
+    if isinstance(workers, list):
+        return [str(item) for item in workers if str(item).strip()]
+    return []
+
+
+def _worker_grid_status(status: str) -> str:
+    normalized = status.strip().lower()
+    if normalized in {"error", "failed", "runtime_error", "parse_error", "worker_error"}:
+        return "error"
+    if normalized in {"started", "running"}:
+        return "running"
+    return "done"

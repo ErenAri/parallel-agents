@@ -7,7 +7,13 @@ in-process calls for HTTP-to-gateway later without touching widgets.
 from __future__ import annotations
 
 import json
+import logging
+import multiprocessing
+import os
 import subprocess
+import time
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,12 +29,14 @@ from parallel_agents.company_workflows import (
     RoadmapPlan,
     TechStackDecision,
     build_architecture_rfc,
+    build_branch_name,
     build_issue_plan_from_roadmap,
     build_prfaq,
     render_pr_summary,
     build_roadmap,
     build_sprint_plan,
     create_product_brief,
+    issue_plan_items,
     recommend_tech_stack,
 )
 from parallel_agents.eval_harness import (
@@ -41,6 +49,7 @@ from parallel_agents.eval_harness import (
     compute_evaluation_score,
     summarize_evaluation_results,
 )
+from parallel_agents.onboarding import build_onboarding_report
 from parallel_agents.project_office import (
     init_project_office,
     list_office_run_ids,
@@ -69,6 +78,7 @@ class BriefResult:
     run_id: str
     artifact_path: Path
     approval_path: Path
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -77,6 +87,7 @@ class ArtifactResult:
     artifact: str
     artifact_path: Path
     approval_path: Path
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -105,6 +116,16 @@ class SetupFixResult:
     after: dict[str, Any]
     actions_taken: list[str] = field(default_factory=list)
     suggested_commands: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GatewayLifecycleStatus:
+    url: str
+    running: bool
+    owned: bool
+    source: str
+    pid: int | None = None
+    detail: str = ""
 
 
 @dataclass
@@ -244,6 +265,8 @@ class EngineService:
 
     def __init__(self) -> None:
         self._current_project: Path | None = None
+        self._gateway_process: Any | None = None
+        self._gateway_url_override: str | None = None
 
     # -- project --------------------------------------------------------
 
@@ -296,6 +319,118 @@ class EngineService:
             suggested_commands=list(payload.get("suggested_commands") or []),
         )
 
+    def onboard_project(self) -> dict[str, Any]:
+        root = self.require_project()
+        current = self.current_project()
+        return build_onboarding_report(
+            root,
+            name=current.name if current else None,
+            fix_setup=True,
+            check_github_auth=False,
+        )
+
+    def gateway_status(self) -> GatewayLifecycleStatus:
+        url = self._gateway_url_for_desktop()
+        process = self._gateway_process
+        owned_alive = bool(process is not None and process.is_alive())
+        exited_detail = ""
+        if process is not None and not owned_alive:
+            exitcode = getattr(process, "exitcode", None)
+            if exitcode is not None:
+                exited_detail = f"Desktop-owned gateway exited with code {exitcode}."
+                self._gateway_process = None
+                process = None
+
+        running, detail = _gateway_health(url)
+        if running:
+            process = self._gateway_process
+            owned_alive = bool(process is not None and process.is_alive())
+            return GatewayLifecycleStatus(
+                url=url,
+                running=True,
+                owned=owned_alive,
+                source="desktop" if owned_alive else "external",
+                pid=int(getattr(process, "pid", 0) or 0) if owned_alive else None,
+                detail=detail,
+            )
+        if owned_alive:
+            return GatewayLifecycleStatus(
+                url=url,
+                running=False,
+                owned=True,
+                source="starting",
+                pid=int(getattr(process, "pid", 0) or 0) or None,
+                detail=detail or "Gateway process started; waiting for health check.",
+            )
+        return GatewayLifecycleStatus(
+            url=url,
+            running=False,
+            owned=False,
+            source="stopped",
+            detail=exited_detail or detail,
+        )
+
+    def start_gateway(self, *, host: str | None = None, port: int | None = None) -> GatewayLifecycleStatus:
+        root = self.require_project()
+        host = (host or os.environ.get("PA_DESKTOP_GATEWAY_HOST") or "127.0.0.1").strip()
+        port = int(port or os.environ.get("PA_DESKTOP_GATEWAY_PORT", "8733"))
+        url = _gateway_url_from_parts(host, port)
+        self._gateway_url_override = url
+
+        current = self.gateway_status()
+        if current.running:
+            return current
+
+        process = self._gateway_process
+        if process is None or not process.is_alive():
+            process = _start_desktop_gateway_process(
+                output_dir=office_dir(root),
+                host=host,
+                port=port,
+                api_key=os.environ.get("PA_GATEWAY_API_KEY"),
+                jwt_secret=os.environ.get("PA_GATEWAY_JWT_SECRET"),
+                jwt_issuer=os.environ.get("PA_GATEWAY_JWT_ISSUER"),
+                jwt_audience=os.environ.get("PA_GATEWAY_JWT_AUDIENCE"),
+                allow_remote_write_tools=os.environ.get("PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS"),
+                slack_signing_secret=os.environ.get("PA_GATEWAY_SLACK_SIGNING_SECRET"),
+                slack_allow_unsigned=os.environ.get("PA_GATEWAY_SLACK_ALLOW_UNSIGNED"),
+            )
+            self._gateway_process = process
+            process.start()
+
+        deadline = time.monotonic() + float(os.environ.get("PA_DESKTOP_GATEWAY_START_TIMEOUT", "8"))
+        while time.monotonic() < deadline:
+            status = self.gateway_status()
+            if status.running:
+                return status
+            process = self._gateway_process
+            if process is None or not process.is_alive():
+                break
+            time.sleep(0.1)
+        return self.gateway_status()
+
+    def stop_gateway(self) -> GatewayLifecycleStatus:
+        process = self._gateway_process
+        if process is None or not process.is_alive():
+            return self.gateway_status()
+
+        process.terminate()
+        process.join(timeout=4)
+        if process.is_alive() and hasattr(process, "kill"):
+            process.kill()
+            process.join(timeout=2)
+        self._gateway_process = None
+        return self.gateway_status()
+
+    def _gateway_url_for_desktop(self) -> str:
+        return self._gateway_url_override or _desktop_gateway_url() or _gateway_url_from_parts(
+            os.environ.get("PA_DESKTOP_GATEWAY_HOST", "127.0.0.1"),
+            int(os.environ.get("PA_DESKTOP_GATEWAY_PORT", "8733")),
+        )
+
+    def _gateway_url_for_run(self) -> str | None:
+        return self._gateway_url_override or _desktop_gateway_url()
+
     def _load_project_info(self, root: Path) -> ProjectInfo:
         payload = load_project_office(root)
         return ProjectInfo(
@@ -313,14 +448,33 @@ class EngineService:
         task: str,
         *,
         on_status: Callable[[str], None] | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> PipelineRunResult:
         root = self.require_project()
+        gateway_url = self._gateway_url_for_run()
+        if gateway_url and self._gateway_available(gateway_url):
+            try:
+                return self._run_pipeline_via_gateway(
+                    task,
+                    root=root,
+                    gateway_url=gateway_url,
+                    on_status=on_status,
+                    on_event=on_event,
+                )
+            except Exception as exc:  # noqa: BLE001 - fallback keeps local desktop usable
+                if not _truthy(os.environ.get("PA_DESKTOP_GATEWAY_REQUIRED")):
+                    if on_status:
+                        on_status(f"Gateway unavailable ({exc}); falling back to in-process run.")
+                else:
+                    raise
+
         config = PipelineConfig(output_dir=str(office_output_dir(root)))
         pipeline = Pipeline(config)
         final_output = await pipeline.run(
             task,
             repo_path=str(root),
             on_status=on_status,
+            on_event=on_event,
         )
         run_id = str(final_output.metadata.get("run_id", "")).strip()
         if not run_id:
@@ -338,6 +492,12 @@ class EngineService:
             "final-output",
             {"event": "created", "source": "desktop-runs", "task": task},
         )
+        if final_output.patch:
+            self._create_patch_review_approval(
+                run_id=run_id,
+                artifact_path=output_path,
+                summary=final_output.summary,
+            )
         self._write_audit(
             run_id,
             {
@@ -360,12 +520,140 @@ class EngineService:
             },
         )
 
+    def _gateway_available(self, gateway_url: str) -> bool:
+        if _truthy(os.environ.get("PA_DESKTOP_USE_GATEWAY")):
+            return True
+        try:
+            _gateway_json_request(gateway_url, "GET", "/health", timeout_seconds=0.35)
+            return True
+        except Exception:  # noqa: BLE001 - auto mode degrades to direct execution
+            return False
+
+    def _run_pipeline_via_gateway(
+        self,
+        task: str,
+        *,
+        root: Path,
+        gateway_url: str,
+        on_status: Callable[[str], None] | None,
+        on_event: Callable[[dict[str, Any]], None] | None,
+    ) -> PipelineRunResult:
+        run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        submitted = _gateway_json_request(
+            gateway_url,
+            "POST",
+            "/runs/pipeline",
+            {
+                "run_id": run_id,
+                "task": task,
+                "repo_path": str(root),
+                "wait": False,
+                "store_backend": os.environ.get("PA_STORE_BACKEND", "file"),
+                "permission_mode": os.environ.get("PA_PERMISSION_MODE", "default"),
+            },
+            timeout_seconds=5.0,
+        )
+        run_id = str(submitted.get("id") or run_id)
+        seen_event_ids: set[int] = set()
+        deadline = time.monotonic() + float(os.environ.get("PA_DESKTOP_GATEWAY_TIMEOUT", "1800"))
+        terminal = {"waiting_for_approval", "blocked_by_policy", "succeeded", "failed"}
+        run_payload = submitted
+
+        while time.monotonic() < deadline:
+            events_payload = _gateway_json_request(
+                gateway_url,
+                "GET",
+                f"/runs/{run_id}/events",
+                timeout_seconds=5.0,
+            )
+            for event in events_payload.get("events", []):
+                if not isinstance(event, dict):
+                    continue
+                event_id = int(event.get("id") or 0)
+                if event_id in seen_event_ids:
+                    continue
+                seen_event_ids.add(event_id)
+                event_name = str(event.get("event") or "")
+                payload = event.get("payload") or {}
+                if event_name == "pipeline_status" and on_status and isinstance(payload, dict):
+                    message = str(payload.get("message") or "").strip()
+                    if message:
+                        on_status(message)
+                if event_name == "pipeline_trace" and on_event and isinstance(payload, dict):
+                    on_event(payload)
+
+            run_payload = _gateway_json_request(
+                gateway_url,
+                "GET",
+                f"/runs/{run_id}",
+                timeout_seconds=5.0,
+            )
+            if str(run_payload.get("status")) in terminal:
+                break
+            time.sleep(0.25)
+        else:
+            raise TimeoutError(f"Gateway run timed out: {run_id}")
+
+        if str(run_payload.get("status")) != "succeeded":
+            raise RuntimeError(run_payload.get("error_message") or f"Gateway run failed: {run_id}")
+
+        payload = dict(run_payload.get("payload") or {})
+        artifact_payload = payload.get("artifact")
+        if not isinstance(artifact_payload, dict):
+            artifact_response = _gateway_json_request(
+                gateway_url,
+                "GET",
+                f"/runs/{run_id}/artifacts/final-output",
+                timeout_seconds=5.0,
+            )
+            artifact_payload = dict(artifact_response.get("artifact") or {})
+        if not isinstance(artifact_payload, dict):
+            artifact_payload = {}
+
+        output_path_text = str(payload.get("artifact_path") or "").strip()
+        output_path = Path(output_path_text) if output_path_text else (
+            office_output_dir(root) / run_id / "company" / "final-output.json"
+        )
+        metadata = artifact_payload.get("metadata") if isinstance(artifact_payload, dict) else {}
+        cost = metadata.get("cost", {}) if isinstance(metadata, dict) else {}
+        worker_results = artifact_payload.get("worker_results", {})
+        worker_statuses = {
+            name: str(result.get("status", "unknown"))
+            for name, result in worker_results.items()
+            if isinstance(result, dict)
+        } if isinstance(worker_results, dict) else {}
+
+        self._write_audit(
+            run_id,
+            {
+                "event": "run.execute",
+                "source": "desktop-gateway",
+                "task": task,
+                "repo": str(root),
+                "has_patch": bool(artifact_payload.get("patch")) if isinstance(artifact_payload, dict) else False,
+            },
+        )
+        if artifact_payload.get("patch") and output_path.exists():
+            self._create_patch_review_approval(
+                run_id=run_id,
+                artifact_path=output_path,
+                summary=str(artifact_payload.get("summary") or payload.get("summary") or ""),
+            )
+        return PipelineRunResult(
+            run_id=run_id,
+            summary=str(artifact_payload.get("summary") or payload.get("summary") or ""),
+            output_path=output_path,
+            total_tokens=int(cost.get("total_tokens", 0) or 0),
+            total_cost_usd=float(cost.get("total_cost_usd", 0.0) or 0.0),
+            worker_statuses=worker_statuses,
+        )
+
     # -- company workflows ---------------------------------------------
 
     def create_brief(self, idea: str, title: str | None = None) -> BriefResult:
         root = self.require_project()
         run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-        brief = self._build_brief(idea, title=title)
+        brief, provenance = self._build_brief(idea, title=title)
         result = self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="brief",
@@ -373,17 +661,19 @@ class EngineService:
             title=brief.title,
             summary=brief.problem_statement,
             root=root,
+            provenance=provenance,
         )
         return BriefResult(
             run_id=run_id,
             artifact_path=result.artifact_path,
             approval_path=result.approval_path,
+            provenance=provenance,
         )
 
     def create_prfaq(self, run_id: str) -> ArtifactResult:
         root = self.require_project()
         brief = self._load_brief(run_id)
-        prfaq = self._build_prfaq(brief)
+        prfaq, provenance = self._build_prfaq(brief)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="prfaq",
@@ -391,12 +681,13 @@ class EngineService:
             title=prfaq.headline,
             summary=prfaq.press_release_summary,
             root=root,
+            provenance=provenance,
         )
 
     def create_roadmap(self, run_id: str, horizon_weeks: int = 12) -> ArtifactResult:
         root = self.require_project()
         brief = self._load_brief(run_id)
-        roadmap = build_roadmap(brief, horizon_weeks=horizon_weeks)
+        roadmap, provenance = self._build_roadmap(brief, horizon_weeks)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="roadmap",
@@ -404,11 +695,13 @@ class EngineService:
             title=roadmap.name,
             summary=f"{len(roadmap.items)} items across {roadmap.horizon_weeks} weeks",
             root=root,
+            provenance=provenance,
         )
 
     def create_tech_stack(self, run_id: str, repo_path: str | Path) -> ArtifactResult:
         root = self.require_project()
-        stack = recommend_tech_stack(repo_path)
+        brief = self._load_brief(run_id)
+        stack, provenance = self._build_tech_stack(brief, repo_path)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="tech-stack",
@@ -416,13 +709,14 @@ class EngineService:
             title=stack.recommended_option,
             summary=stack.rationale,
             root=root,
+            provenance=provenance,
         )
 
     def create_rfc(self, run_id: str) -> ArtifactResult:
         root = self.require_project()
         brief = self._load_brief(run_id)
         stack = self._load_artifact(run_id, "tech-stack", TechStackDecision)
-        rfc = self._build_rfc(brief, stack)
+        rfc, provenance = self._build_rfc(brief, stack)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="rfc",
@@ -430,12 +724,13 @@ class EngineService:
             title=rfc.title,
             summary=rfc.decision,
             root=root,
+            provenance=provenance,
         )
 
     def create_sprint(self, run_id: str, milestone: str) -> ArtifactResult:
         root = self.require_project()
         roadmap = self._load_artifact(run_id, "roadmap", RoadmapPlan)
-        sprint = build_sprint_plan(roadmap, milestone=milestone)
+        sprint, provenance = self._build_sprint(roadmap, milestone)
         return self._persist_artifact_with_approval(
             run_id=run_id,
             artifact="sprint",
@@ -443,6 +738,7 @@ class EngineService:
             title=sprint.name,
             summary=f"{len(sprint.items)} items, milestone {sprint.milestone}",
             root=root,
+            provenance=provenance,
         )
 
     # -- github plan / apply (slice 2) ---------------------------------
@@ -451,10 +747,14 @@ class EngineService:
         root = self.require_project()
         roadmap = self._load_artifact(run_id, "roadmap", RoadmapPlan)
         planned = build_issue_plan_from_roadmap(roadmap)
+        planned_dump = [item.model_dump(mode="json") for item in planned]
         payload = {
             "repo": repo,
             "issue_count": len(planned),
-            "issues": [item.model_dump(mode="json") for item in planned],
+            # Emit both keys so the artifact matches the network surfaces and a
+            # plan made here applies cleanly from the CLI/gateway/MCP too.
+            "issues": planned_dump,
+            "issue_plan": planned_dump,
             "requires_approval": True,
             "approved": False,
         }
@@ -468,9 +768,16 @@ class EngineService:
         )
 
     def apply_issue_plan(self, run_id: str, *, dry_run: bool = True) -> dict[str, Any]:
-        """Apply an issue plan to GitHub. Live writes require `gh` to be authenticated."""
+        """Sync wrapper for headless/CLI callers. UI code must use
+        apply_issue_plan_async via AsyncJob (this raises inside a running loop)."""
         import asyncio
 
+        return asyncio.run(self.apply_issue_plan_async(run_id, dry_run=dry_run))
+
+    async def apply_issue_plan_async(
+        self, run_id: str, *, dry_run: bool = True
+    ) -> dict[str, Any]:
+        """Apply an issue plan to GitHub. Live writes require `gh` to be authenticated."""
         from parallel_agents.tools.github_apply import execute_company_issue_plan
         from parallel_agents.tools.github_tools import parse_repo_ref
 
@@ -478,7 +785,8 @@ class EngineService:
         approval = self._find_approval(run_id, artifact="issue-plan")
         if approval is None:
             raise FileNotFoundError("No issue-plan approval found for this run.")
-        if approval["data"].get("status") != "approved":
+        approval_data = approval["data"]
+        if approval_data.get("status") != "approved":
             raise PermissionError(
                 "Issue plan must be approved before apply. "
                 "Approve it on the Approvals page first."
@@ -487,7 +795,28 @@ class EngineService:
         plan_path = office_output_dir(root) / run_id / "company" / "issue-plan.json"
         if not plan_path.exists():
             raise FileNotFoundError(f"Issue-plan artifact missing: {plan_path}")
-        plan_payload = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        # Bind the approval to the exact bytes that were approved: if the plan was
+        # regenerated or edited after approval, the digests differ and apply is
+        # refused (closes the approve-then-swap TOCTOU window). Read the bytes
+        # exactly once and parse that same buffer, so the verified bytes ARE the
+        # applied bytes (no second read that an attacker could swap in between).
+        approved_digest = approval_data.get("artifact_sha256")
+        if not approved_digest:
+            raise PermissionError(
+                "Approval has no bound artifact digest (legacy or missing-file "
+                "approval); re-approve the issue plan before applying."
+            )
+        import hashlib
+
+        raw = plan_path.read_bytes()
+        current_digest = hashlib.sha256(raw).hexdigest()
+        if current_digest != approved_digest:
+            raise PermissionError(
+                "Issue plan changed since approval; re-approve before applying."
+            )
+
+        plan_payload = json.loads(raw.decode("utf-8"))
 
         repo_ref = plan_payload.get("repo", "")
         parsed = parse_repo_ref(str(repo_ref))
@@ -495,15 +824,13 @@ class EngineService:
             raise ValueError(f"Issue-plan repo ref is invalid: {repo_ref!r}")
         owner, repo = parsed
 
-        issues = plan_payload.get("issues", [])
-        result = asyncio.run(
-            execute_company_issue_plan(
-                owner=owner,
-                repo=repo,
-                issue_plan=issues,
-                create_milestones=True,
-                dry_run=dry_run,
-            )
+        issues = issue_plan_items(plan_payload)
+        result = await execute_company_issue_plan(
+            owner=owner,
+            repo=repo,
+            issue_plan=issues,
+            create_milestones=True,
+            dry_run=dry_run,
         )
         result["run_id"] = run_id
         result["mode"] = "dry-run" if dry_run else "live"
@@ -536,8 +863,31 @@ class EngineService:
         title: str | None = None,
         draft: bool = True,
     ) -> PullRequestResult:
+        """Sync wrapper for headless/CLI callers. UI code must use
+        create_pull_request_async via AsyncJob (this raises inside a running loop)."""
         import asyncio
 
+        return asyncio.run(
+            self.create_pull_request_async(
+                run_id,
+                repo_ref=repo_ref,
+                head=head,
+                base=base,
+                title=title,
+                draft=draft,
+            )
+        )
+
+    async def create_pull_request_async(
+        self,
+        run_id: str,
+        *,
+        repo_ref: str,
+        head: str,
+        base: str = "main",
+        title: str | None = None,
+        draft: bool = True,
+    ) -> PullRequestResult:
         from parallel_agents.tools.github_tools import create_pr, parse_repo_ref
 
         root = self.require_project()
@@ -550,6 +900,7 @@ class EngineService:
         clean_base = base.strip() or "main"
         if not clean_head:
             raise ValueError("head branch cannot be empty.")
+        self._assert_patch_review_approved(run_id)
 
         resolved_title = (title or "").strip() or f"Parallel Agents Office: {run_id}"
         summary_markdown = self._build_pr_summary(run_id)
@@ -557,16 +908,14 @@ class EngineService:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(summary_markdown, encoding="utf-8")
 
-        pr_url = asyncio.run(
-            create_pr(
-                owner,
-                repo,
-                resolved_title,
-                summary_markdown,
-                head=clean_head,
-                base=clean_base,
-                draft=draft,
-            )
+        pr_url = await create_pr(
+            owner,
+            repo,
+            resolved_title,
+            summary_markdown,
+            head=clean_head,
+            base=clean_base,
+            draft=draft,
         )
         if not pr_url:
             raise RuntimeError(
@@ -620,6 +969,7 @@ class EngineService:
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=15,
             )
         except FileNotFoundError:
             return GitHubAuthStatus(
@@ -973,6 +1323,23 @@ class EngineService:
                 seen.append(ms)
         return seen
 
+    def suggest_pr_branch(self, run_id: str | None) -> str:
+        root = self.require_project()
+        current_branch = self._git_current_branch(root)
+        if current_branch and current_branch not in {"main", "master", "HEAD"}:
+            return current_branch
+
+        title = ""
+        if run_id:
+            brief_payload = self._load_artifact_payload(run_id, "brief") or {}
+            title = str(brief_payload.get("title") or "").strip()
+            if not title:
+                roadmap_payload = self._load_artifact_payload(run_id, "roadmap") or {}
+                title = str(roadmap_payload.get("name") or "").strip()
+        if not title:
+            title = "parallel agents office update"
+        return build_branch_name(run_id or "run", title, prefix="pa")
+
     def _load_brief(self, run_id: str) -> ProductBrief:
         return self._load_artifact(run_id, "brief", ProductBrief)
 
@@ -1041,41 +1408,73 @@ class EngineService:
 
     # -- LLM-backed generation (with deterministic fallback) -----------
 
-    def _build_brief(self, idea: str, *, title: str | None) -> ProductBrief:
-        import os
-
-        if not _truthy(os.environ.get("PA_DESKTOP_LLM_BRIEF")):
+    def _build_brief(self, idea: str, *, title: str | None):
+        def _fallback():
             return create_product_brief(idea, title=title)
-        try:
+
+        def _llm():
             from parallel_agents.desktop.services.llm_brief import generate_llm_brief
 
             return generate_llm_brief(idea, title=title)
-        except Exception:
-            return create_product_brief(idea, title=title)
+
+        return _generate_with_provenance("BRIEF", _llm, _fallback)
 
     def _build_prfaq(self, brief: ProductBrief):
-        import os
-
-        if not _truthy(os.environ.get("PA_DESKTOP_LLM_PRFAQ")):
+        def _fallback():
             return build_prfaq(brief)
-        try:
+
+        def _llm():
             from parallel_agents.desktop.services.llm_prfaq import generate_llm_prfaq
 
             return generate_llm_prfaq(brief)
-        except Exception:
-            return build_prfaq(brief)
+
+        return _generate_with_provenance("PRFAQ", _llm, _fallback)
+
+    def _build_tech_stack(self, brief: ProductBrief, repo_path: str | Path):
+        def _fallback():
+            return recommend_tech_stack(repo_path)
+
+        def _llm():
+            from parallel_agents.desktop.services.llm_tech_stack import (
+                generate_llm_tech_stack,
+            )
+
+            return generate_llm_tech_stack(brief, repo_path)
+
+        return _generate_with_provenance("TECH_STACK", _llm, _fallback)
 
     def _build_rfc(self, brief: ProductBrief, stack: TechStackDecision):
-        import os
-
-        if not _truthy(os.environ.get("PA_DESKTOP_LLM_RFC")):
+        def _fallback():
             return build_architecture_rfc(brief, stack)
-        try:
+
+        def _llm():
             from parallel_agents.desktop.services.llm_rfc import generate_llm_rfc
 
             return generate_llm_rfc(brief, stack)
-        except Exception:
-            return build_architecture_rfc(brief, stack)
+
+        return _generate_with_provenance("RFC", _llm, _fallback)
+
+    def _build_roadmap(self, brief: ProductBrief, horizon_weeks: int):
+        def _fallback():
+            return build_roadmap(brief, horizon_weeks=horizon_weeks)
+
+        def _llm():
+            from parallel_agents.desktop.services.llm_roadmap import generate_llm_roadmap
+
+            return generate_llm_roadmap(brief, horizon_weeks=horizon_weeks)
+
+        return _generate_with_provenance("ROADMAP", _llm, _fallback)
+
+    def _build_sprint(self, roadmap: RoadmapPlan, milestone: str):
+        def _fallback():
+            return build_sprint_plan(roadmap, milestone=milestone)
+
+        def _llm():
+            from parallel_agents.desktop.services.llm_sprint import generate_llm_sprint
+
+            return generate_llm_sprint(roadmap, milestone=milestone)
+
+        return _generate_with_provenance("SPRINT", _llm, _fallback)
 
     def _persist_artifact_with_approval(
         self,
@@ -1086,15 +1485,14 @@ class EngineService:
         title: str,
         summary: str,
         root: Path,
+        provenance: dict[str, Any] | None = None,
     ) -> ArtifactResult:
         output_dir = office_output_dir(root)
         artifact_path = persist_company_artifact(output_dir, run_id, artifact, payload)
-        append_company_artifact_event(
-            output_dir,
-            run_id,
-            artifact,
-            {"event": "created", "source": "desktop", "title": title},
-        )
+        event: dict[str, Any] = {"event": "created", "source": "desktop", "title": title}
+        if provenance:
+            event["provenance"] = provenance
+        append_company_artifact_event(output_dir, run_id, artifact, event)
         approval_path = self._create_pending_approval(
             run_id=run_id,
             artifact=artifact,
@@ -1107,6 +1505,7 @@ class EngineService:
             artifact=artifact,
             artifact_path=artifact_path,
             approval_path=approval_path,
+            provenance=provenance or {},
         )
 
     # -- runs / artifacts ----------------------------------------------
@@ -1154,6 +1553,54 @@ class EngineService:
             approval_path, decision="rejected", actor=approver, message=reason
         )
 
+    def _create_patch_review_approval(
+        self,
+        *,
+        run_id: str,
+        artifact_path: Path,
+        summary: str,
+    ) -> Path | None:
+        root = self.require_project()
+        try:
+            artifact_relpath = str(artifact_path.relative_to(office_dir(root)))
+        except ValueError:
+            return None
+        return self._create_pending_approval(
+            run_id=run_id,
+            artifact="final-output",
+            title="Review generated patch before PR",
+            summary=summary or "Generated patch requires review before PR creation.",
+            artifact_relpath=artifact_relpath,
+        )
+
+    def _assert_patch_review_approved(self, run_id: str) -> None:
+        root = self.require_project()
+        final_output = self._load_artifact_payload(run_id, "final-output")
+        if not final_output or not final_output.get("patch"):
+            return
+        approval = self._find_approval(run_id, artifact="final-output")
+        if approval is None:
+            raise PermissionError(
+                "Generated patch must be reviewed before PR creation. "
+                "Open Approvals and approve the final-output artifact first."
+            )
+        data = approval.get("data", {})
+        if data.get("status") != "approved":
+            raise PermissionError(
+                "Generated patch is not approved. "
+                "Approve the final-output artifact before creating a PR."
+            )
+        artifact_relpath = str(data.get("artifact_path") or "").strip()
+        approved_digest = str(data.get("artifact_sha256") or "").strip()
+        current_digest = (
+            self._artifact_digest(root, artifact_relpath) if artifact_relpath else None
+        )
+        if approved_digest and current_digest and approved_digest != current_digest:
+            raise PermissionError(
+                "Generated patch changed after approval. "
+                "Re-approve the final-output artifact before creating a PR."
+            )
+
     def _create_pending_approval(
         self,
         *,
@@ -1168,11 +1615,33 @@ class EngineService:
         approvals_dir.mkdir(parents=True, exist_ok=True)
         approval_id = f"{run_id}-{artifact}"
         path = approvals_dir / f"{approval_id}.json"
+
+        # If a decision already existed for this artifact (regeneration), record
+        # an explicit supersede event rather than silently voiding the decision.
+        if path.exists():
+            try:
+                prior = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                prior = {}
+            if prior.get("status") in {"approved", "rejected"}:
+                self._write_audit(
+                    run_id,
+                    {
+                        "event": "approval.superseded",
+                        "approval_id": approval_id,
+                        "artifact": artifact,
+                        "previous_status": prior.get("status"),
+                        "previous_decided_by": prior.get("decided_by"),
+                    },
+                )
+
+        artifact_sha256 = self._artifact_digest(root, artifact_relpath)
         payload = {
             "approval_id": approval_id,
             "run_id": run_id,
             "artifact": artifact,
             "artifact_path": artifact_relpath,
+            "artifact_sha256": artifact_sha256,
             "title": title,
             "summary": summary,
             "status": "pending",
@@ -1181,9 +1650,23 @@ class EngineService:
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         self._write_audit(
             run_id,
-            {"event": "approval.created", "approval_id": approval_id, "artifact": artifact},
+            {
+                "event": "approval.created",
+                "approval_id": approval_id,
+                "artifact": artifact,
+                "artifact_sha256": artifact_sha256,
+            },
         )
         return path
+
+    @staticmethod
+    def _artifact_digest(root: Path, artifact_relpath: str) -> str | None:
+        import hashlib
+
+        path = office_dir(root) / artifact_relpath
+        if not path.exists():
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _decide_approval(
         self, approval_path: Path, *, decision: str, actor: str, message: str
@@ -1251,9 +1734,16 @@ class EngineService:
             if not line.strip():
                 continue
             try:
-                payload = json.loads(line)
+                entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            # Hash-chained entries wrap the event under "payload"; flatten it so
+            # callers see the same top-level fields (run_id, event, ...) as before.
+            inner = entry.get("payload")
+            if isinstance(inner, dict):
+                payload = {"timestamp": entry.get("timestamp"), **inner}
+            else:
+                payload = entry  # tolerate any legacy unchained lines
             if run_id and str(payload.get("run_id", "")) != run_id:
                 continue
             if approval_id and str(payload.get("approval_id", "")) != approval_id:
@@ -1264,13 +1754,64 @@ class EngineService:
         return events
 
     def _write_audit(self, run_id: str, event: dict[str, Any]) -> None:
+        """Append a governance event to the workspace-wide, hash-chained log.
+
+        Approval/apply/PR/run events are the governance-relevant ones; chaining
+        them here makes the 'tamper-evident audit' claim true for them (they were
+        previously written as plain, unchained JSONL).
+        """
+        from parallel_agents.company_artifacts import append_hash_chained_line
+
         root = self.require_project()
-        audit_dir = office_dir(root) / "audit"
-        audit_dir.mkdir(parents=True, exist_ok=True)
-        record = {"timestamp": _iso_now(), "run_id": run_id, **event}
-        with (audit_dir / "events.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record))
-            fh.write("\n")
+        log_path = office_dir(root) / "audit" / "events.jsonl"
+        append_hash_chained_line(log_path, {"run_id": run_id, **event})
+
+    def verify_audit_chains(self, run_id: str | None = None) -> dict[str, Any]:
+        """Recompute the governance log and per-run artifact chains.
+
+        Returns a structured report; ``ok`` is True only if every chain verifies.
+        """
+        from parallel_agents.company_artifacts import (
+            verify_hash_chain,
+            verify_run_audit_chains,
+        )
+
+        root = self.require_project()
+        central = verify_hash_chain(
+            office_dir(root) / "audit" / "events.jsonl", "governance-log"
+        )
+        run_ids = [run_id] if run_id else [r["id"] for r in self.list_runs()]
+        runs: list[dict[str, Any]] = []
+        all_ok = central.ok
+        for rid in run_ids:
+            rv = verify_run_audit_chains(office_output_dir(root), rid)
+            all_ok = all_ok and rv.ok
+            runs.append(
+                {
+                    "run_id": rid,
+                    "ok": rv.ok,
+                    "chains": [
+                        {
+                            "artifact": c.artifact_name,
+                            "ok": c.ok,
+                            "entries": c.entry_count,
+                            "reason": c.reason,
+                            "broken_index": c.broken_index,
+                        }
+                        for c in rv.chains
+                    ],
+                }
+            )
+        return {
+            "ok": all_ok,
+            "governance_log": {
+                "ok": central.ok,
+                "entries": central.entry_count,
+                "reason": central.reason,
+                "broken_index": central.broken_index,
+            },
+            "runs": runs,
+        }
 
     @staticmethod
     def _git_current_branch(root: Path) -> str | None:
@@ -1525,8 +2066,155 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _gateway_url_from_parts(host: str, port: int) -> str:
+    return f"http://{host.strip()}:{int(port)}"
+
+
+def _desktop_gateway_url() -> str | None:
+    explicit = os.environ.get("PA_DESKTOP_GATEWAY_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    mode = os.environ.get("PA_DESKTOP_USE_GATEWAY", "auto").strip().lower()
+    if mode in {"0", "false", "no", "off"}:
+        return None
+    return "http://127.0.0.1:8733"
+
+
+def _gateway_health(gateway_url: str) -> tuple[bool, str]:
+    try:
+        payload = _gateway_json_request(gateway_url, "GET", "/health", timeout_seconds=0.5)
+    except Exception as exc:  # noqa: BLE001 - status must degrade to a display string
+        return False, str(exc)
+    status = str(payload.get("status") or "").strip()
+    if status == "ok":
+        return True, "Gateway health check passed."
+    return False, f"Gateway health check returned status {status or 'unknown'}."
+
+
+def _start_desktop_gateway_process(
+    *,
+    output_dir: Path,
+    host: str,
+    port: int,
+    api_key: str | None,
+    jwt_secret: str | None,
+    jwt_issuer: str | None,
+    jwt_audience: str | None,
+    allow_remote_write_tools: str | None,
+    slack_signing_secret: str | None,
+    slack_allow_unsigned: str | None,
+):
+    multiprocessing.freeze_support()
+    context = multiprocessing.get_context("spawn")
+    return context.Process(
+        target=_run_desktop_gateway_process,
+        kwargs={
+            "output_dir": str(output_dir),
+            "host": host,
+            "port": int(port),
+            "api_key": api_key,
+            "jwt_secret": jwt_secret,
+            "jwt_issuer": jwt_issuer,
+            "jwt_audience": jwt_audience,
+            "allow_remote_write_tools": allow_remote_write_tools,
+            "slack_signing_secret": slack_signing_secret,
+            "slack_allow_unsigned": slack_allow_unsigned,
+        },
+        daemon=True,
+        name="parallel-agents-desktop-gateway",
+    )
+
+
+def _run_desktop_gateway_process(
+    *,
+    output_dir: str,
+    host: str,
+    port: int,
+    api_key: str | None,
+    jwt_secret: str | None,
+    jwt_issuer: str | None,
+    jwt_audience: str | None,
+    allow_remote_write_tools: str | None,
+    slack_signing_secret: str | None,
+    slack_allow_unsigned: str | None,
+) -> None:
+    from parallel_agents.gateway import run_gateway_server
+
+    run_gateway_server(
+        host=host,
+        port=port,
+        output_dir=output_dir,
+        api_key=api_key,
+        jwt_secret=jwt_secret,
+        jwt_issuer=jwt_issuer,
+        jwt_audience=jwt_audience,
+        allow_remote_write_tools=allow_remote_write_tools,
+        slack_signing_secret=slack_signing_secret,
+        slack_allow_unsigned=slack_allow_unsigned,
+    )
+
+
+def _gateway_json_request(
+    base_url: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    api_key = os.environ.get("PA_GATEWAY_API_KEY")
+    if api_key:
+        headers["X-PA-API-Key"] = api_key
+    request = urllib.request.Request(url, data=data, method=method.upper(), headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gateway HTTP {exc.code}: {detail}") from exc
+    if not body.strip():
+        return {}
+    parsed = json.loads(body)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Gateway returned a non-object JSON response.")
+    return parsed
+
+
 def _truthy(value: str | None) -> bool:
     return bool(value) and value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _generate_with_provenance(artifact_key: str, llm_fn, fallback_fn):
+    """Run the LLM generator when enabled, else the deterministic builder.
+
+    Returns ``(artifact, provenance)`` where provenance records whether the LLM
+    or the template produced it (and the model / failure reason). LLM failures
+    are logged and degrade to the template — never silently swallowed.
+    """
+    from parallel_agents.desktop.services import llm_config
+
+    if not llm_config.llm_enabled(artifact_key):
+        reason = "disabled" if llm_config.llm_available() else "no-api-key"
+        return fallback_fn(), {"generator": "template", "reason": reason}
+    try:
+        artifact, model = llm_fn()
+        return artifact, {"generator": "llm", "model": model}
+    except Exception as exc:  # noqa: BLE001 - any LLM failure falls back
+        logging.getLogger("parallel_agents.desktop.engine").warning(
+            "LLM generation for %s failed (%s); using deterministic fallback.",
+            artifact_key,
+            exc,
+        )
+        return fallback_fn(), {
+            "generator": "template",
+            "reason": f"llm-error: {type(exc).__name__}",
+        }
 
 
 def _metric_delta(candidate: float | None, baseline: float | None) -> float | None:

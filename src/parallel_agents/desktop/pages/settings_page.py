@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 
 from parallel_agents.desktop._qt import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QFrame,
@@ -20,6 +19,21 @@ from parallel_agents.desktop.services.settings_store import (
     MODEL_CHOICES,
     PERMISSION_MODE_CHOICES,
 )
+
+# Per-artifact LLM toggles, in workflow order, with display labels.
+_LLM_ARTIFACTS: tuple[tuple[str, str], ...] = (
+    ("BRIEF", "Brief"),
+    ("PRFAQ", "PR/FAQ"),
+    ("TECH_STACK", "Tech stack"),
+    ("RFC", "Architecture RFC"),
+    ("ROADMAP", "Roadmap"),
+    ("SPRINT", "Sprint"),
+)
+
+# Tri-state: Default = let the policy decide (on when a key is present);
+# On = force LLM; Off = force deterministic template.
+_TRISTATE = ("Default", "On", "Off")
+_TRISTATE_TO_VALUE = {"Default": "", "On": "1", "Off": "0"}
 
 
 def _make_combo(choices: tuple[str, ...], editable: bool = True) -> QComboBox:
@@ -39,6 +53,13 @@ def _set_combo_value(combo: QComboBox, value: str) -> None:
         combo.setCurrentIndex(idx)
     else:
         combo.setEditText(value)
+
+
+def _env_to_tristate(name: str) -> str:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return "Default"
+    return "On" if raw.strip().lower() in {"1", "true", "yes", "on"} else "Off"
 
 
 class SettingsPage(Page):
@@ -68,7 +89,7 @@ class SettingsPage(Page):
         form.addRow("Planner model", self.planner_model)
         form.addRow("Judge model", self.judge_model)
         form.addRow("Permission mode", self.permission_mode)
-        form.addRow("LLM model (brief / PRFAQ / RFC)", self.llm_model)
+        form.addRow("LLM model (all generators)", self.llm_model)
         form.addRow("Gateway API key", self.gateway_key)
         layout.addLayout(form)
 
@@ -79,18 +100,25 @@ class SettingsPage(Page):
         )
         layout.addWidget(llm_header)
 
-        self.llm_brief = QCheckBox("Brief")
-        self.llm_prfaq = QCheckBox("PR/FAQ")
-        self.llm_rfc = QCheckBox("Architecture RFC")
         flag_hint = QLabel(
-            "Falls back to deterministic templates if disabled, the key is missing, or generation fails."
+            "Default = on when an ANTHROPIC_API_KEY is set, off otherwise. "
+            "On forces the LLM; Off forces deterministic templates. Any artifact "
+            "falls back to a template if the key is missing or generation fails."
         )
         flag_hint.setStyleSheet("color: #8a90a2; font-size: 12px;")
         flag_hint.setWordWrap(True)
-
-        for cb in (self.llm_brief, self.llm_prfaq, self.llm_rfc):
-            layout.addWidget(cb)
         layout.addWidget(flag_hint)
+
+        llm_form = QFormLayout()
+        llm_form.setVerticalSpacing(8)
+        self.llm_global = _make_combo(_TRISTATE, editable=False)
+        llm_form.addRow("All generators", self.llm_global)
+        self.llm_flags: dict[str, QComboBox] = {}
+        for key, label in _LLM_ARTIFACTS:
+            combo = _make_combo(_TRISTATE, editable=False)
+            self.llm_flags[key] = combo
+            llm_form.addRow(label, combo)
+        layout.addLayout(llm_form)
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
@@ -128,9 +156,9 @@ class SettingsPage(Page):
         )
         _set_combo_value(self.llm_model, os.environ.get("PA_DESKTOP_LLM_MODEL", ""))
         self.gateway_key.setText(os.environ.get("PA_GATEWAY_API_KEY", ""))
-        self.llm_brief.setChecked(_truthy_env("PA_DESKTOP_LLM_BRIEF"))
-        self.llm_prfaq.setChecked(_truthy_env("PA_DESKTOP_LLM_PRFAQ"))
-        self.llm_rfc.setChecked(_truthy_env("PA_DESKTOP_LLM_RFC"))
+        _set_combo_value(self.llm_global, _env_to_tristate("PA_DESKTOP_LLM"))
+        for key, combo in self.llm_flags.items():
+            _set_combo_value(combo, _env_to_tristate(f"PA_DESKTOP_LLM_{key}"))
 
     def _collect(self) -> dict[str, str]:
         values = {
@@ -139,10 +167,12 @@ class SettingsPage(Page):
             "PA_PERMISSION_MODE": self.permission_mode.currentText().strip(),
             "PA_GATEWAY_API_KEY": self.gateway_key.text(),
             "PA_DESKTOP_LLM_MODEL": self.llm_model.currentText().strip(),
-            "PA_DESKTOP_LLM_BRIEF": "1" if self.llm_brief.isChecked() else "",
-            "PA_DESKTOP_LLM_PRFAQ": "1" if self.llm_prfaq.isChecked() else "",
-            "PA_DESKTOP_LLM_RFC": "1" if self.llm_rfc.isChecked() else "",
+            "PA_DESKTOP_LLM": _TRISTATE_TO_VALUE.get(self.llm_global.currentText(), ""),
         }
+        for key, combo in self.llm_flags.items():
+            values[f"PA_DESKTOP_LLM_{key}"] = _TRISTATE_TO_VALUE.get(
+                combo.currentText(), ""
+            )
         return {k: v for k, v in values.items() if k in KNOWN_KEYS}
 
     def _save_user(self) -> None:
@@ -167,8 +197,3 @@ class SettingsPage(Page):
                 os.environ[key] = value
             else:
                 os.environ.pop(key, None)
-
-
-def _truthy_env(name: str) -> bool:
-    value = os.environ.get(name, "").strip().lower()
-    return value in {"1", "true", "yes", "on"}

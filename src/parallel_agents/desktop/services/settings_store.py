@@ -27,9 +27,23 @@ KNOWN_KEYS: tuple[str, ...] = (
     "PA_JUDGE_MODEL",
     "PA_PERMISSION_MODE",
     "PA_GATEWAY_API_KEY",
+    "PA_GATEWAY_SLACK_SIGNING_SECRET",
+    "PA_GATEWAY_SLACK_ALLOW_UNSIGNED",
+    "PA_DESKTOP_GATEWAY_URL",
+    "PA_DESKTOP_GATEWAY_HOST",
+    "PA_DESKTOP_GATEWAY_PORT",
+    "PA_DESKTOP_USE_GATEWAY",
+    "PA_DESKTOP_GATEWAY_REQUIRED",
+    "PA_DESKTOP_GATEWAY_TIMEOUT",
+    "PA_DESKTOP_GATEWAY_START_TIMEOUT",
+    # Per-artifact LLM toggles (override the default-on-when-key-present policy).
+    "PA_DESKTOP_LLM",
     "PA_DESKTOP_LLM_BRIEF",
     "PA_DESKTOP_LLM_PRFAQ",
+    "PA_DESKTOP_LLM_TECH_STACK",
     "PA_DESKTOP_LLM_RFC",
+    "PA_DESKTOP_LLM_ROADMAP",
+    "PA_DESKTOP_LLM_SPRINT",
     "PA_DESKTOP_LLM_MODEL",
     "PA_DESKTOP_BRIEF_MODEL",
 )
@@ -40,9 +54,9 @@ MODEL_CHOICES: tuple[str, ...] = (
     "opus",
     "sonnet",
     "haiku",
-    "claude-opus-4-7",
+    "claude-opus-4-8",
     "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5",
 )
 
 PERMISSION_MODE_CHOICES: tuple[str, ...] = (

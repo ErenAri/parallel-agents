@@ -21,6 +21,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Added expanded benchmark fixture: `examples/public_benchmark_v2.json`.
 - Added `parallel-agents eval publish` for shareable public benchmark JSON/Markdown snapshots.
 - Desktop office improvements:
+  - first-run onboarding action shared with `parallel-agents office onboard`
+  - project-scoped local gateway start/stop/status controls
+  - runs page can route real pipeline execution through the local gateway control plane with fallback
+  - worker tiles now prefer structured pipeline trace events over status-string inference
   - project-home summary with recent project picker
   - runs page now executes real pipeline runs
   - live run activity stream and worker status updates during execution
@@ -39,8 +43,18 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
   - approvals queue bulk approve/reject actions (selected and visible rows)
   - approvals artifact preview with previous-run diff
   - approvals audit-event drilldown for run/approval history
-  - GitHub PR creation flow from desktop with run-linked PR summary artifact
+  - GitHub PR creation flow from desktop with run-linked PR summary artifact, branch suggestions, and generated-patch approval gate
   - desktop company flow `gh auth status` check for preflight GitHub readiness
+- Gateway now supports core planner/worker/judge execution through `POST /runs/pipeline`, including persistent status/trace events and a `final-output` artifact.
+- Gateway now exposes a local channel-adapter pairing boundary:
+  - `POST /channels/slack/events` with Slack signature verification and URL verification
+  - `POST /channels/inbound`
+  - `POST /channels/pairing/approve`
+  - `GET /channels/peers`
+  - `parallel-agents gateway channel inbound/approve/peers`
+  - unknown senders receive pairing codes and are not processed until approved
+- `.gitignore` now excludes local `uv` caches/lockfiles, coverage output, and gateway connector scratch directories.
+- Added `parallel-agents office onboard` for local workspace setup, model-readiness reporting, GitHub-readiness reporting, and suggested next actions.
 - Workspace knowledge layer v1:
   - `parallel-agents office memory add/list/search/policies`
   - project workspace memory store under `.parallel-agents/memory/`

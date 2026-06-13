@@ -522,6 +522,22 @@ def build_issue_plan_from_roadmap(
     return planned
 
 
+def issue_plan_items(payload: dict[str, Any]) -> list[Any]:
+    """Return the executable issue list from an issue-plan artifact.
+
+    Unifies the two historical artifact shapes: the network surfaces (CLI,
+    gateway, MCP) store the normalized executor list under ``issue_plan`` while
+    the desktop stores it under ``issues``. Preferring ``issue_plan`` keeps the
+    richer normalized list when present and falls back to ``issues`` so a plan
+    created on any surface applies from any other — they now share one workspace
+    root, so cross-surface reads must agree on the schema.
+    """
+    items = payload.get("issue_plan")
+    if not items:
+        items = payload.get("issues")
+    return list(items) if isinstance(items, list) else []
+
+
 def build_github_workflow_templates(roadmap: RoadmapPlan | None = None) -> dict[str, Any]:
     labels = [
         {

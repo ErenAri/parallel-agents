@@ -9,11 +9,12 @@ import inspect
 import json
 import os
 import queue
+import secrets
 import sqlite3
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,6 +25,7 @@ from parallel_agents.company_artifacts import (
     load_company_artifact_events,
     persist_company_artifact,
 )
+from parallel_agents.config import DEFAULT_ARTIFACT_DIR, PipelineConfig
 from parallel_agents.company_policy import (
     CompanyApplyPolicy,
     derive_policy_from_issue_plan,
@@ -34,7 +36,9 @@ from parallel_agents.company_workflows import (
     build_issue_plan_from_roadmap,
     build_roadmap,
     create_product_brief,
+    issue_plan_items,
 )
+from parallel_agents.pipeline import Pipeline
 from parallel_agents.tools.github_tools import parse_repo_ref
 from parallel_agents.workspace_memory import (
     add_memory_entry,
@@ -60,9 +64,92 @@ TERMINAL_RUN_STATUSES = {
     "failed",
 }
 
+PAIRING_CODE_TTL_SECONDS = 15 * 60
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _utc_after(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+def _write_tools_enabled() -> bool:
+    """Whether the gateway may perform external/irreversible writes (apply).
+
+    Off by default: the gateway is a network surface, so live GitHub writes must
+    be explicitly opted into via PA_ALLOW_WRITE_TOOLS. Read, plan, and approve
+    flows are unaffected; only the apply step that mutates a remote is gated.
+    """
+    return os.environ.get("PA_ALLOW_WRITE_TOOLS", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _pipeline_config_from_payload(payload: dict[str, Any], *, output_dir: Path) -> PipelineConfig:
+    store_backend = str(payload.get("store_backend") or payload.get("store") or "file")
+    if store_backend not in {"file", "sqlite"}:
+        raise ValueError("store_backend must be 'file' or 'sqlite'")
+    config = PipelineConfig(output_dir=str(output_dir), store_backend=store_backend)
+
+    workers = _string_list(payload.get("workers"))
+    if workers:
+        enabled = set(workers)
+        for name in config.workers:
+            config.workers[name].enabled = name in enabled
+
+    disabled_workers = _string_list(payload.get("disable_workers"))
+    for name in disabled_workers:
+        if name in config.workers:
+            config.workers[name].enabled = False
+
+    model = str(payload.get("model") or "").strip()
+    if model:
+        config.planner_model = model
+        config.judge_model = model
+        for worker_config in config.workers.values():
+            worker_config.model = model
+
+    permission_mode = str(payload.get("permission_mode") or "").strip()
+    if permission_mode:
+        if permission_mode not in {"default", "acceptEdits", "plan", "bypassPermissions"}:
+            raise ValueError("permission_mode must be default, acceptEdits, plan, or bypassPermissions")
+        config.permission_mode = permission_mode  # type: ignore[assignment]
+
+    max_parallel_workers = payload.get("max_parallel_workers")
+    if max_parallel_workers is not None:
+        config.max_parallel_workers = max(1, int(max_parallel_workers))
+
+    parse_retry_attempts = payload.get("parse_retry_attempts")
+    if parse_retry_attempts is not None:
+        config.parse_retry_attempts = max(0, int(parse_retry_attempts))
+
+    return config
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _new_pairing_code() -> str:
+    return secrets.token_hex(3).upper()
+
+
+def _first_text(payload: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if value is not None:
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -134,6 +221,46 @@ def _resolve_gateway_allow_remote_write_tools(value: bool | str | None) -> bool:
     if value is None:
         return _as_bool(os.getenv("PA_GATEWAY_ALLOW_REMOTE_WRITE_TOOLS"), default=False)
     return _as_bool(value, default=False)
+
+
+def _resolve_gateway_slack_signing_secret(value: str | None) -> str | None:
+    raw = value if value is not None else os.getenv("PA_GATEWAY_SLACK_SIGNING_SECRET")
+    if raw is None:
+        return None
+    cleaned = str(raw).strip()
+    return cleaned or None
+
+
+def _resolve_gateway_slack_allow_unsigned(value: bool | str | None) -> bool:
+    if value is None:
+        return _as_bool(os.getenv("PA_GATEWAY_SLACK_ALLOW_UNSIGNED"), default=False)
+    return _as_bool(value, default=False)
+
+
+def _verify_slack_signature(
+    *,
+    signing_secret: str,
+    timestamp: str | None,
+    signature: str | None,
+    raw_body: bytes,
+    now_seconds: int | None = None,
+) -> bool:
+    if not timestamp or not signature:
+        return False
+    try:
+        timestamp_int = int(timestamp)
+    except ValueError:
+        return False
+    now = int(now_seconds if now_seconds is not None else time.time())
+    if abs(now - timestamp_int) > 60 * 5:
+        return False
+    base = f"v0:{timestamp}:".encode("utf-8") + raw_body
+    expected = "v0=" + hmac.new(
+        signing_secret.encode("utf-8"),
+        base,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 def _decode_b64url(segment: str) -> bytes:
@@ -216,7 +343,7 @@ def _decode_jwt_payload(token: str) -> dict[str, Any] | None:
 
 
 class GatewayStore:
-    def __init__(self, output_dir: str | Path = ".parallel-agents-output") -> None:
+    def __init__(self, output_dir: str | Path = DEFAULT_ARTIFACT_DIR) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.output_dir / "gateway.sqlite"
@@ -564,6 +691,126 @@ class GatewayStore:
             items.append(payload)
         return items
 
+    def is_channel_peer_allowed(self, *, channel: str, peer_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM channel_peers
+                WHERE channel = ? AND peer_id = ?
+                LIMIT 1
+                """,
+                (channel, peer_id),
+            ).fetchone()
+        return row is not None
+
+    def create_pairing_code(
+        self,
+        *,
+        channel: str,
+        peer_id: str,
+        ttl_seconds: int = PAIRING_CODE_TTL_SECONDS,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM pairing_codes
+                WHERE channel = ? AND peer_id = ? AND approved_at IS NULL AND expires_at > ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (channel, peer_id, now),
+            ).fetchone()
+            if row:
+                return _row_to_dict(row)
+
+            code = _new_pairing_code()
+            expires_at = _utc_after(max(60, int(ttl_seconds)))
+            for _ in range(5):
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO pairing_codes (
+                            code, channel, peer_id, created_at, expires_at, approved_at, approved_by
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (code, channel, peer_id, now, expires_at, None, None),
+                    )
+                    break
+                except sqlite3.IntegrityError:
+                    code = _new_pairing_code()
+            else:
+                raise RuntimeError("could not allocate pairing code")
+
+        return {
+            "code": code,
+            "channel": channel,
+            "peer_id": peer_id,
+            "created_at": now,
+            "expires_at": expires_at,
+            "approved_at": None,
+            "approved_by": None,
+        }
+
+    def approve_pairing_code(self, *, code: str, approved_by: str) -> dict[str, Any]:
+        now = _utc_now()
+        normalized_code = code.strip().upper()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM pairing_codes WHERE code = ?",
+                (normalized_code,),
+            ).fetchone()
+            if not row:
+                raise ValueError("pairing code not found")
+            item = _row_to_dict(row)
+            if item.get("approved_at"):
+                raise ValueError("pairing code already approved")
+            if str(item.get("expires_at") or "") <= now:
+                raise ValueError("pairing code expired")
+
+            conn.execute(
+                """
+                UPDATE pairing_codes
+                SET approved_at = ?, approved_by = ?
+                WHERE code = ?
+                """,
+                (now, approved_by, normalized_code),
+            )
+            conn.execute(
+                """
+                INSERT INTO channel_peers (
+                    channel, peer_id, approved_at, approved_by, label
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(channel, peer_id) DO UPDATE SET
+                    approved_at = excluded.approved_at,
+                    approved_by = excluded.approved_by,
+                    label = excluded.label
+                """,
+                (
+                    item["channel"],
+                    item["peer_id"],
+                    now,
+                    approved_by,
+                    f"{item['channel']}:{item['peer_id']}",
+                ),
+            )
+        item["approved_at"] = now
+        item["approved_by"] = approved_by
+        return item
+
+    def list_channel_peers(self, *, channel: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM channel_peers"
+        params: list[Any] = []
+        if channel:
+            sql += " WHERE channel = ?"
+            params.append(channel)
+        sql += " ORDER BY approved_at DESC"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def get_metrics_summary(self) -> dict[str, Any]:
         with self._connect() as conn:
             project_count = int(conn.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"])
@@ -682,6 +929,25 @@ class GatewayStore:
                     principal TEXT NOT NULL,
                     allowed INTEGER NOT NULL,
                     detail TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS channel_peers (
+                    channel TEXT NOT NULL,
+                    peer_id TEXT NOT NULL,
+                    approved_at TEXT NOT NULL,
+                    approved_by TEXT NOT NULL,
+                    label TEXT,
+                    PRIMARY KEY(channel, peer_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS pairing_codes (
+                    code TEXT PRIMARY KEY,
+                    channel TEXT NOT NULL,
+                    peer_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    approved_at TEXT,
+                    approved_by TEXT
                 );
                 """
             )
@@ -839,16 +1105,18 @@ class GatewayJobRunner:
 
 
 def create_gateway_app(
-    output_dir: str | Path = ".parallel-agents-output",
+    output_dir: str | Path = DEFAULT_ARTIFACT_DIR,
     api_key: str | None = None,
     jwt_secret: str | None = None,
     jwt_issuer: str | None = None,
     jwt_audience: str | None = None,
     allow_remote_write_tools: bool | str | None = None,
+    slack_signing_secret: str | None = None,
+    slack_allow_unsigned: bool | str | None = None,
 ):
     try:
         from fastapi import FastAPI, HTTPException, Request
-        from fastapi.responses import JSONResponse
+        from fastapi.responses import JSONResponse, PlainTextResponse
     except ImportError as exc:  # pragma: no cover - import guard
         raise RuntimeError(
             "Gateway support requires FastAPI. Install with `pip install parallel-agents[gateway]`."
@@ -861,6 +1129,12 @@ def create_gateway_app(
     resolved_jwt_audience = _resolve_gateway_jwt_audience(jwt_audience)
     resolved_allow_remote_write_tools = _resolve_gateway_allow_remote_write_tools(
         allow_remote_write_tools
+    )
+    resolved_slack_signing_secret = _resolve_gateway_slack_signing_secret(
+        slack_signing_secret
+    )
+    resolved_slack_allow_unsigned = _resolve_gateway_slack_allow_unsigned(
+        slack_allow_unsigned
     )
 
     def _run_company_idea(run: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
@@ -991,6 +1265,12 @@ def create_gateway_app(
         )
 
     def _run_company_apply(run: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
+        if not _write_tools_enabled():
+            return (
+                "blocked_by_policy",
+                {"write_tools_enabled": False},
+                "live writes disabled; set PA_ALLOW_WRITE_TOOLS=1 to enable apply",
+            )
         payload = dict(run.get("payload") or {})
         run_id = str(payload.get("run_id") or run["id"])
         artifact_name_override = payload.get("artifact")
@@ -1010,7 +1290,7 @@ def create_gateway_app(
         if not parsed:
             raise ValueError("artifact repo is invalid or missing")
         owner, repo = parsed
-        issue_plan = artifact.get("issue_plan") or []
+        issue_plan = issue_plan_items(artifact)
 
         policy = derive_policy_from_issue_plan(f"{owner}/{repo}", issue_plan)
         if isinstance(artifact.get("apply_policy"), dict):
@@ -1046,8 +1326,77 @@ def create_gateway_app(
             None,
         )
 
+    def _run_pipeline_run(run: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
+        payload = dict(run.get("payload") or {})
+        task = str(payload.get("task") or payload.get("input") or "").strip()
+        if not task:
+            raise ValueError("task is required")
+
+        repo_path_value = payload.get("repo_path")
+        if repo_path_value is None:
+            repo_path_value = payload.get("repo")
+        repo_path = str(repo_path_value).strip() if repo_path_value is not None else None
+        if repo_path == "":
+            repo_path = None
+
+        config = _pipeline_config_from_payload(payload, output_dir=store.output_dir)
+
+        def _on_status(message: str) -> None:
+            store.add_event(run["id"], "pipeline_status", {"message": message})
+
+        def _on_event(event: dict[str, Any]) -> None:
+            store.add_event(run["id"], "pipeline_trace", event)
+
+        final_output = asyncio.run(
+            Pipeline(config).run(
+                task,
+                repo_path=repo_path,
+                on_status=_on_status,
+                on_event=_on_event,
+                run_id=run["id"],
+            )
+        )
+        final_payload = final_output.model_dump(mode="json")
+        artifact_path = persist_company_artifact(
+            store.output_dir,
+            run["id"],
+            "final-output",
+            final_payload,
+        )
+
+        worker_errors = [
+            name
+            for name, result in final_output.worker_results.items()
+            if result.status == "error"
+        ]
+        summary = final_output.summary.lower()
+        failed = (
+            bool(final_output.metadata.get("error"))
+            or "failed to parse" in summary
+            or "parse error" in summary
+            or bool(worker_errors)
+        )
+        result_payload = {
+            "artifact": final_payload,
+            "artifact_path": str(artifact_path),
+            "summary": final_output.summary,
+            "run_id": run["id"],
+            "pipeline_run_id": final_output.metadata.get("run_id", run["id"]),
+            "worker_errors": worker_errors,
+            "has_patch": final_output.patch is not None,
+            "patch_validation": final_output.metadata.get("patch_validation"),
+            "cost": final_output.metadata.get("cost"),
+        }
+        return (
+            "failed" if failed else "succeeded",
+            result_payload,
+            str(final_output.metadata.get("error") or "pipeline run failed") if failed else None,
+        )
+
     def _run_handler(run: dict[str, Any]) -> tuple[str, dict[str, Any] | None, str | None]:
         kind = str(run.get("kind") or "")
+        if kind == "pipeline.run":
+            return _run_pipeline_run(run)
         if kind == "company.idea":
             return _run_company_idea(run)
         if kind == "company.roadmap":
@@ -1115,7 +1464,10 @@ def create_gateway_app(
         path = request.url.path
         authorized, auth_mode, principal = _request_auth_context(request)
         auth_required = bool(resolved_api_key or resolved_jwt_secret)
-        bypass_auth = (not auth_required) or (path == "/health")
+        slack_signed_endpoint = path == "/channels/slack/events" and bool(
+            resolved_slack_signing_secret or resolved_slack_allow_unsigned
+        )
+        bypass_auth = (not auth_required) or (path == "/health") or slack_signed_endpoint
 
         if bypass_auth or authorized:
             response = await call_next(request)
@@ -1187,6 +1539,54 @@ def create_gateway_app(
             timeout_seconds = 30.0
         return runner.wait_for_terminal(run["id"], timeout_seconds=timeout_seconds) or run
 
+    def _handle_channel_inbound(payload: dict[str, Any]) -> dict[str, Any]:
+        channel = _first_text(payload, "channel").lower()
+        peer_id = _first_text(payload, "peer_id", "sender", "from")
+        message = _first_text(payload, "message", "text", "task", "body")
+        if not channel:
+            raise HTTPException(status_code=400, detail="channel is required")
+        if not peer_id:
+            raise HTTPException(status_code=400, detail="peer_id is required")
+
+        if not store.is_channel_peer_allowed(channel=channel, peer_id=peer_id):
+            pairing = store.create_pairing_code(channel=channel, peer_id=peer_id)
+            return {
+                "status": "pairing_required",
+                "processed": False,
+                "channel": channel,
+                "peer_id": peer_id,
+                "pairing_code": pairing["code"],
+                "expires_at": pairing["expires_at"],
+                "message": "Unknown sender was not processed. Approve the pairing code first.",
+            }
+
+        response: dict[str, Any] = {
+            "status": "accepted",
+            "processed": False,
+            "channel": channel,
+            "peer_id": peer_id,
+        }
+        if not _as_bool(payload.get("execute"), default=False):
+            return response
+        if not message:
+            raise HTTPException(status_code=400, detail="message/text/task is required when execute=true")
+
+        run_payload = {
+            "run_id": _first_text(payload, "run_id") or f"run-channel-{uuid.uuid4().hex[:12]}",
+            "task": message,
+            "repo_path": _first_text(payload, "repo_path", "repo") or None,
+            "permission_mode": _first_text(payload, "permission_mode") or "plan",
+            "wait": _as_bool(payload.get("wait"), default=False),
+            "wait_timeout_seconds": payload.get("wait_timeout_seconds"),
+            "source": {
+                "channel": channel,
+                "peer_id": peer_id,
+            },
+        }
+        response["processed"] = True
+        response["run"] = _submit_run("pipeline.run", run_payload)
+        return response
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         auth_modes: list[str] = []
@@ -1201,6 +1601,10 @@ def create_gateway_app(
             "auth_required": bool(resolved_api_key or resolved_jwt_secret),
             "auth_modes": auth_modes,
             "allow_remote_write_tools": resolved_allow_remote_write_tools,
+            "slack_events_enabled": bool(
+                resolved_slack_signing_secret or resolved_slack_allow_unsigned
+            ),
+            "slack_unsigned_allowed": bool(resolved_slack_allow_unsigned),
         }
 
     def _gateway_mcp_tools_catalog() -> list[dict[str, Any]]:
@@ -1387,6 +1791,108 @@ def create_gateway_app(
             "response_is_json": bool(response_payload["response_is_json"]),
         }
 
+    @app.post("/runs/pipeline")
+    def run_pipeline(payload: dict[str, Any]) -> dict[str, Any]:
+        return _submit_run("pipeline.run", payload)
+
+    async def slack_events(request):
+        raw_body = await request.body()
+        if not resolved_slack_allow_unsigned:
+            if not resolved_slack_signing_secret:
+                raise HTTPException(status_code=503, detail="Slack signing secret is not configured")
+            if not _verify_slack_signature(
+                signing_secret=resolved_slack_signing_secret,
+                timestamp=request.headers.get("x-slack-request-timestamp"),
+                signature=request.headers.get("x-slack-signature"),
+                raw_body=raw_body,
+            ):
+                raise HTTPException(status_code=401, detail="invalid Slack signature")
+
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="invalid Slack JSON payload") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Slack payload must be a JSON object")
+
+        if payload.get("type") == "url_verification":
+            challenge = str(payload.get("challenge") or "")
+            return PlainTextResponse(challenge)
+
+        if payload.get("type") != "event_callback":
+            return {"status": "ignored", "reason": "unsupported Slack payload type"}
+
+        event = payload.get("event")
+        if not isinstance(event, dict):
+            return {"status": "ignored", "reason": "missing Slack event"}
+        if event.get("type") != "message":
+            return {"status": "ignored", "reason": "unsupported Slack event type"}
+        if event.get("subtype") or event.get("bot_id"):
+            return {"status": "ignored", "reason": "Slack bot/subtype messages are ignored"}
+
+        user_id = _first_text(event, "user")
+        channel_id = _first_text(event, "channel")
+        text = _first_text(event, "text")
+        if not user_id or not channel_id:
+            return {"status": "ignored", "reason": "Slack event missing user/channel"}
+
+        peer_id = ":".join(
+            item
+            for item in [
+                _first_text(payload, "team_id"),
+                channel_id,
+                user_id,
+            ]
+            if item
+        )
+        inbound_payload = {
+            "channel": "slack",
+            "peer_id": peer_id,
+            "message": text,
+            "execute": True,
+            "wait": False,
+            "permission_mode": "plan",
+            "source_event": {
+                "team_id": payload.get("team_id"),
+                "event_id": payload.get("event_id"),
+                "event_time": payload.get("event_time"),
+                "channel": channel_id,
+                "user": user_id,
+            },
+        }
+        return _handle_channel_inbound(inbound_payload)
+
+    slack_events.__annotations__["request"] = Request
+    app.post("/channels/slack/events")(slack_events)
+
+    @app.post("/channels/inbound")
+    def channel_inbound(payload: dict[str, Any]) -> dict[str, Any]:
+        return _handle_channel_inbound(payload)
+
+    @app.post("/channels/pairing/approve")
+    def approve_channel_pairing(payload: dict[str, Any]) -> dict[str, Any]:
+        code = _first_text(payload, "code", "pairing_code")
+        if not code:
+            raise HTTPException(status_code=400, detail="code is required")
+        approved_by = _first_text(payload, "approved_by", "approver") or "gateway-operator"
+        try:
+            pairing = store.approve_pairing_code(code=code, approved_by=approved_by)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "status": "approved",
+            "channel": pairing["channel"],
+            "peer_id": pairing["peer_id"],
+            "approved_at": pairing["approved_at"],
+            "approved_by": pairing["approved_by"],
+        }
+
+    @app.get("/channels/peers")
+    def list_channel_peers(channel: str | None = None) -> dict[str, Any]:
+        normalized = channel.strip().lower() if channel else None
+        peers = store.list_channel_peers(channel=normalized)
+        return {"peers": peers, "count": len(peers)}
+
     @app.post("/runs/company/idea")
     def run_company_idea(payload: dict[str, Any]) -> dict[str, Any]:
         return _submit_run("company.idea", payload)
@@ -1572,12 +2078,14 @@ def run_gateway_server(
     *,
     host: str = "127.0.0.1",
     port: int = 8733,
-    output_dir: str | Path = ".parallel-agents-output",
+    output_dir: str | Path = DEFAULT_ARTIFACT_DIR,
     api_key: str | None = None,
     jwt_secret: str | None = None,
     jwt_issuer: str | None = None,
     jwt_audience: str | None = None,
     allow_remote_write_tools: bool | str | None = None,
+    slack_signing_secret: str | None = None,
+    slack_allow_unsigned: bool | str | None = None,
 ) -> None:
     try:
         import uvicorn
@@ -1593,5 +2101,7 @@ def run_gateway_server(
         jwt_issuer=jwt_issuer,
         jwt_audience=jwt_audience,
         allow_remote_write_tools=allow_remote_write_tools,
+        slack_signing_secret=slack_signing_secret,
+        slack_allow_unsigned=slack_allow_unsigned,
     )
     uvicorn.run(app, host=host, port=port)

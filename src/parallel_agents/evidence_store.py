@@ -102,7 +102,13 @@ class EvidenceStore(BaseEvidenceStore):
 
     def save_worker_result(self, result: WorkerResult) -> None:
         filename = f"{result.worker_name}_result.json"
-        self._write_json(self.workers_path / filename, result.model_dump())
+        path = self.workers_path / filename
+        existing = self._read_json(path)
+        if existing and existing.get("subtask_id") not in (None, result.subtask_id):
+            # Same worker ran another subtask this run; keep both results.
+            filename = f"{result.worker_name}_{result.subtask_id}_result.json"
+            path = self.workers_path / filename
+        self._write_json(path, result.model_dump())
 
     def load_worker_result(self, worker_name: str) -> WorkerResult | None:
         filename = f"{worker_name}_result.json"
@@ -111,11 +117,14 @@ class EvidenceStore(BaseEvidenceStore):
 
     def load_all_worker_results(self) -> dict[str, WorkerResult]:
         results: dict[str, WorkerResult] = {}
-        for path in self.workers_path.glob("*_result.json"):
+        for path in sorted(self.workers_path.glob("*_result.json")):
             data = self._read_json(path)
             if data:
                 result = WorkerResult(**data)
-                results[result.worker_name] = result
+                key = result.worker_name
+                if key in results:
+                    key = f"{result.worker_name}:{result.subtask_id}"
+                results[key] = result
         return results
 
     def save_final_output(self, output: FinalOutput) -> None:
@@ -224,13 +233,27 @@ class SQLiteEvidenceStore(BaseEvidenceStore):
 
     def save_worker_result(self, result: WorkerResult) -> None:
         data = json.dumps(result.model_dump(), default=str)
+
+        def _select(conn):
+            return conn.execute(
+                "SELECT data FROM worker_results WHERE run_id = ? AND worker_name = ?",
+                (self.run_id, result.worker_name)).fetchone()
+
+        stored_name = result.worker_name
+        row = self._exec(_select)
+        if row:
+            existing_subtask = json.loads(row["data"]).get("subtask_id")
+            if existing_subtask not in (None, result.subtask_id):
+                # Same worker ran another subtask this run; keep both rows.
+                stored_name = f"{result.worker_name}:{result.subtask_id}"
+
         def _do(conn):
             conn.execute(
                 "INSERT INTO worker_results (run_id, worker_name, data, status, findings_count, recommendations_count) "
                 "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(run_id, worker_name) DO UPDATE SET "
                 "data=excluded.data, status=excluded.status, findings_count=excluded.findings_count, "
                 "recommendations_count=excluded.recommendations_count",
-                (self.run_id, result.worker_name, data, result.status, len(result.findings), len(result.recommendations)))
+                (self.run_id, stored_name, data, result.status, len(result.findings), len(result.recommendations)))
         self._exec(_do)
 
     def load_worker_result(self, worker_name: str) -> WorkerResult | None:

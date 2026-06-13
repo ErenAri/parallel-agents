@@ -2,10 +2,12 @@
 #
 # Prereq: pip install parallel-agents[desktop]  (installs PySide6)
 # Build:  pyinstaller parallel-agents-desktop.spec
-# Output: dist/parallel-agents-desktop[.exe]
+# Output: dist/parallel-agents-desktop/  (onedir: launcher + bundled deps)
 #
-# Produces a windowed binary (no console). For the headless CLI binary,
-# use parallel-agents.spec instead.
+# Produces a windowed onedir bundle (no console). Onedir is used so the Qt
+# runtime is unpacked on disk — faster startup, easier to sign, and directly
+# consumable by the Inno Setup installer. For the headless CLI binary, use
+# parallel-agents.spec instead.
 
 from pathlib import Path
 
@@ -26,6 +28,8 @@ a = Analysis(
         "parallel_agents.evidence_store",
         "parallel_agents.cost_tracker",
         "parallel_agents.project_office",
+        "parallel_agents.onboarding",
+        "parallel_agents.gateway",
         "parallel_agents.company_artifacts",
         "parallel_agents.company_policy",
         "parallel_agents.company_workflows",
@@ -60,6 +64,9 @@ a = Analysis(
         "pydantic",
         "pydantic_settings",
         "anthropic",
+        "fastapi",
+        "starlette",
+        "uvicorn",
         # PySide6 — PyInstaller usually picks these up via its hook,
         # listed explicitly for clarity and to fail fast on missing extra.
         "PySide6",
@@ -82,21 +89,29 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,   # onedir: binaries/datas are collected below
     name="parallel-agents-desktop",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,           # windowed app, no console
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="parallel-agents-desktop",
 )

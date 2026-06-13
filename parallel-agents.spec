@@ -20,6 +20,8 @@ a = Analysis(
         "parallel_agents.evidence_store",
         "parallel_agents.cost_tracker",
         "parallel_agents.project_office",
+        "parallel_agents.onboarding",
+        "parallel_agents.gateway",
         "parallel_agents.agents",
         "parallel_agents.agents.base",
         "parallel_agents.agents.planner",

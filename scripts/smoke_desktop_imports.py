@@ -12,7 +12,13 @@ from pathlib import Path
 
 
 def _install_pyside6_stub() -> None:
-    class _Stub:
+    class _StubMeta(type):
+        # Resolve class-level enum access like QSizePolicy.Policy.Minimum or
+        # QComboBox.InsertPolicy.NoInsert to nested stub instances.
+        def __getattr__(cls, name):
+            return _Stub()
+
+    class _Stub(metaclass=_StubMeta):
         def __init__(self, *a, **kw):
             pass
 
@@ -24,6 +30,38 @@ def _install_pyside6_stub() -> None:
 
         def __setattr__(self, name, value):
             object.__setattr__(self, name, value)
+
+        # Stubbed Qt accessors that return collections (selectedItems, findChildren,
+        # etc.) should behave as empty iterables rather than blowing up.
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self):
+            return 0
+
+        def __bool__(self):
+            return False
+
+        # Stubbed int-returning accessors (count(), currentRow(), width(), ...).
+        def __index__(self):
+            return 0
+
+        def __int__(self):
+            return 0
+
+        # Comparisons against ints (e.g. `if combo.findText(x) >= 0`) take the
+        # not-found / falsy branch under the stub.
+        def __lt__(self, other):
+            return False
+
+        def __le__(self, other):
+            return False
+
+        def __gt__(self, other):
+            return False
+
+        def __ge__(self, other):
+            return False
 
     class _SignalStub:
         def __init__(self, *a, **kw):
@@ -44,6 +82,17 @@ def _install_pyside6_stub() -> None:
     class _EnumMember:
         def __init__(self, name): self._name = name
         def __repr__(self): return f"Stub({self._name})"
+        def __getattr__(self, name): return _EnumMember(f"{self._name}.{name}")
+        def __eq__(self, other): return isinstance(other, _EnumMember) and other._name == self._name
+        def __hash__(self): return hash(self._name)
+        # Qt enum/flag values support bitwise composition.
+        def __invert__(self): return _EnumMember(f"~{self._name}")
+        def __and__(self, other): return _EnumMember(f"{self._name}&")
+        def __rand__(self, other): return _EnumMember(f"&{self._name}")
+        def __or__(self, other): return _EnumMember(f"{self._name}|")
+        def __ror__(self, other): return _EnumMember(f"|{self._name}")
+        def __int__(self): return 0
+        def __index__(self): return 0
 
     class _NamespaceMeta(type):
         def __getattr__(cls, item):
@@ -71,8 +120,8 @@ def _install_pyside6_stub() -> None:
     }
     # QtGui
     qt_gui = {n: _Stub for n in [
-        "QAction", "QColor", "QFont", "QIcon", "QPalette",
-        "QTextCharFormat", "QTextCursor",
+        "QAction", "QColor", "QFont", "QIcon", "QPainter", "QPalette",
+        "QPen", "QPixmap", "QTextCharFormat", "QTextCursor",
     ]}
     # QtWidgets
     qt_widgets = {n: _Stub for n in [
@@ -111,6 +160,14 @@ def main() -> int:
         "parallel_agents.desktop.widgets.artifact_viewer",
         "parallel_agents.desktop.services.engine",
         "parallel_agents.desktop.services.workers",
+        "parallel_agents.desktop.services.llm",
+        "parallel_agents.desktop.services.llm_config",
+        "parallel_agents.desktop.services.llm_brief",
+        "parallel_agents.desktop.services.llm_prfaq",
+        "parallel_agents.desktop.services.llm_tech_stack",
+        "parallel_agents.desktop.services.llm_rfc",
+        "parallel_agents.desktop.services.llm_roadmap",
+        "parallel_agents.desktop.services.llm_sprint",
         "parallel_agents.desktop.pages._base",
         "parallel_agents.desktop.pages.projects_page",
         "parallel_agents.desktop.pages.company_page",

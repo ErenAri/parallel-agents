@@ -55,11 +55,15 @@ class ProjectsPage(Page):
         self.fix_setup_btn = QPushButton("Fix Setup")
         self.fix_setup_btn.clicked.connect(self._fix_setup)
         self.fix_setup_btn.setEnabled(False)
+        self.onboard_btn = QPushButton("Onboard")
+        self.onboard_btn.clicked.connect(self._onboard_project)
+        self.onboard_btn.setEnabled(False)
 
         actions.addWidget(open_btn)
         actions.addWidget(new_btn)
         actions.addWidget(self.doctor_btn)
         actions.addWidget(self.fix_setup_btn)
+        actions.addWidget(self.onboard_btn)
         actions.addStretch(1)
         self.body_layout.addLayout(actions)
 
@@ -73,9 +77,27 @@ class ProjectsPage(Page):
         self.current_meta.setStyleSheet("color: #8a90a2;")
         self.current_stats = QLabel("")
         self.current_stats.setStyleSheet("color: #8a90a2;")
+        self.gateway_meta = QLabel("Gateway: no project selected.")
+        self.gateway_meta.setStyleSheet("color: #8a90a2;")
+        gateway_actions = QHBoxLayout()
+        self.gateway_refresh_btn = QPushButton("Refresh Gateway")
+        self.gateway_refresh_btn.clicked.connect(self._refresh_gateway_status)
+        self.gateway_refresh_btn.setEnabled(False)
+        self.gateway_start_btn = QPushButton("Start Gateway")
+        self.gateway_start_btn.clicked.connect(self._start_gateway)
+        self.gateway_start_btn.setEnabled(False)
+        self.gateway_stop_btn = QPushButton("Stop Gateway")
+        self.gateway_stop_btn.clicked.connect(self._stop_gateway)
+        self.gateway_stop_btn.setEnabled(False)
+        gateway_actions.addWidget(self.gateway_refresh_btn)
+        gateway_actions.addWidget(self.gateway_start_btn)
+        gateway_actions.addWidget(self.gateway_stop_btn)
+        gateway_actions.addStretch(1)
         card_layout.addWidget(self.current_label)
         card_layout.addWidget(self.current_meta)
         card_layout.addWidget(self.current_stats)
+        card_layout.addWidget(self.gateway_meta)
+        card_layout.addLayout(gateway_actions)
         self.body_layout.addWidget(self.current_card)
 
         self.productivity_card = QFrame()
@@ -300,6 +322,85 @@ class ProjectsPage(Page):
         message.exec()
         self._refresh(current)
 
+    def _onboard_project(self) -> None:
+        current = self.engine.current_project()
+        if current is None:
+            QMessageBox.information(self, "Onboard", "Open a project first.")
+            return
+        payload = self.engine.onboard_project()
+        next_actions = payload.get("next_actions") or []
+        details = [
+            f"- {item.get('label', 'Step')}: {item.get('command', '')}"
+            for item in next_actions
+            if isinstance(item, dict)
+        ]
+        message = QMessageBox(self)
+        message.setWindowTitle("Office Onboarding")
+        message.setText(f"Onboarding status: {payload.get('status', 'unknown')}")
+        message.setInformativeText(
+            "\n".join(
+                [
+                    f"Ready for local run: {payload.get('ready_for_local_run')}",
+                    f"Ready for GitHub flow: {payload.get('ready_for_github_flow')}",
+                ]
+            )
+        )
+        message.setDetailedText("\n".join(details) if details else "No next actions.")
+        message.exec()
+        self._refresh(current)
+
+    def _start_gateway(self) -> None:
+        current = self.engine.current_project()
+        if current is None:
+            QMessageBox.information(self, "Gateway", "Open a project first.")
+            return
+        try:
+            status = self.engine.start_gateway()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Gateway start failed", str(exc))
+            return
+        self._render_gateway_status(status)
+        if not status.running:
+            QMessageBox.warning(
+                self,
+                "Gateway",
+                f"Gateway process started but is not healthy yet.\n\n{status.detail}",
+            )
+
+    def _stop_gateway(self) -> None:
+        current = self.engine.current_project()
+        if current is None:
+            QMessageBox.information(self, "Gateway", "Open a project first.")
+            return
+        status = self.engine.stop_gateway()
+        self._render_gateway_status(status)
+        if status.running and not status.owned:
+            QMessageBox.information(
+                self,
+                "Gateway",
+                "A gateway is still running, but it was not started by this desktop session.",
+            )
+
+    def _refresh_gateway_status(self) -> None:
+        current = self.engine.current_project()
+        if current is None:
+            self.gateway_meta.setText("Gateway: no project selected.")
+            self.gateway_refresh_btn.setEnabled(False)
+            self.gateway_start_btn.setEnabled(False)
+            self.gateway_stop_btn.setEnabled(False)
+            return
+        self._render_gateway_status(self.engine.gateway_status())
+
+    def _render_gateway_status(self, status) -> None:
+        state = "running" if status.running else status.source
+        owner = "desktop-owned" if status.owned else status.source
+        pid = f" pid={status.pid}" if status.pid else ""
+        detail = f" — {status.detail}" if status.detail else ""
+        self.gateway_meta.setText(f"Gateway: {state} ({owner}) {status.url}{pid}{detail}")
+        self.gateway_refresh_btn.setEnabled(True)
+        self.gateway_start_btn.setEnabled(not status.running)
+        self.gateway_stop_btn.setEnabled(status.owned)
+
     def _clear_recent_projects(self) -> None:
         self.history.clear("project_root")
         self._refresh_recent_projects()
@@ -318,6 +419,8 @@ class ProjectsPage(Page):
             + (f"  |  Branch: {home.current_branch}" if home.current_branch else "")
         )
         self.fix_setup_btn.setEnabled(not home.diagnostics_healthy)
+        self.onboard_btn.setEnabled(True)
+        self._refresh_gateway_status()
         self._refresh_productivity()
         self.recent_list.clear()
         for run in self.engine.list_runs():

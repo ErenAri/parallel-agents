@@ -8,6 +8,7 @@ import pytest
 
 from parallel_agents.desktop.services import engine as engine_module
 from parallel_agents.desktop.services.engine import EngineService
+from parallel_agents.company_artifacts import persist_company_artifact
 from parallel_agents.eval_harness import (
     EvaluationAggregate,
     EvaluationAnnotations,
@@ -22,6 +23,11 @@ from parallel_agents.models import FinalOutput, WorkerResult
 from parallel_agents.project_office import office_dir
 
 
+@pytest.fixture(autouse=True)
+def disable_desktop_gateway_auto(monkeypatch):
+    monkeypatch.setenv("PA_DESKTOP_USE_GATEWAY", "0")
+
+
 def test_run_pipeline_persists_final_output_and_audit(tmp_path, monkeypatch):
     status_messages: list[str] = []
 
@@ -29,11 +35,19 @@ def test_run_pipeline_persists_final_output_and_audit(tmp_path, monkeypatch):
         def __init__(self, config) -> None:
             self.config = config
 
-        async def run(self, task: str, repo_path: str | None = None, on_status=None):
+        async def run(
+            self,
+            task: str,
+            repo_path: str | None = None,
+            on_status=None,
+            on_event=None,
+        ):
             assert task == "Run a full review"
             assert repo_path == str(tmp_path.resolve())
             if on_status is not None:
                 on_status("Planning: fake planner step")
+            if on_event is not None:
+                on_event({"agent": "pipeline", "phase": "planning", "status": "started"})
             return FinalOutput(
                 summary="Synthetic final summary",
                 worker_results={
@@ -84,9 +98,43 @@ def test_run_pipeline_persists_final_output_and_audit(tmp_path, monkeypatch):
     assert audit_path.exists()
     lines = [line for line in audit_path.read_text(encoding="utf-8").splitlines() if line]
     assert lines, "expected at least one audit event"
-    latest = json.loads(lines[-1])
+    # events.jsonl is hash-chained: the event fields live under "payload".
+    latest = json.loads(lines[-1])["payload"]
     assert latest["run_id"] == "run-test-001"
     assert latest["event"] == "run.execute"
+
+
+def test_run_pipeline_emits_structured_events(tmp_path, monkeypatch):
+    events: list[dict] = []
+
+    class FakePipeline:
+        def __init__(self, config) -> None:
+            self.config = config
+
+        async def run(
+            self,
+            task: str,
+            repo_path: str | None = None,
+            on_status=None,
+            on_event=None,
+        ):
+            if on_event is not None:
+                on_event({"agent": "security", "event": "worker_started"})
+            return FinalOutput(
+                summary="Synthetic final summary",
+                metadata={
+                    "run_id": "run-events-001",
+                    "cost": {"total_tokens": 0, "total_cost_usd": 0.0},
+                },
+            )
+
+    monkeypatch.setattr(engine_module, "Pipeline", FakePipeline)
+
+    service = EngineService()
+    service.open_project(tmp_path)
+    asyncio.run(service.run_pipeline("Run with events", on_event=events.append))
+
+    assert events == [{"agent": "security", "event": "worker_started"}]
 
 
 def test_run_pipeline_requires_run_id(tmp_path, monkeypatch):
@@ -94,7 +142,13 @@ def test_run_pipeline_requires_run_id(tmp_path, monkeypatch):
         def __init__(self, config) -> None:
             self.config = config
 
-        async def run(self, task: str, repo_path: str | None = None, on_status=None):
+        async def run(
+            self,
+            task: str,
+            repo_path: str | None = None,
+            on_status=None,
+            on_event=None,
+        ):
             return FinalOutput(summary="Missing run id", metadata={})
 
     monkeypatch.setattr(engine_module, "Pipeline", FakePipeline)
@@ -104,6 +158,335 @@ def test_run_pipeline_requires_run_id(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="run_id"):
         asyncio.run(service.run_pipeline("Run without id"))
+
+
+def test_run_pipeline_uses_gateway_when_available(tmp_path, monkeypatch):
+    calls: list[tuple[str, str, dict | None]] = []
+    status_messages: list[str] = []
+    events: list[dict] = []
+
+    def fake_gateway_url():
+        return "http://127.0.0.1:8733"
+
+    def fake_gateway_request(base_url, method, path, payload=None, *, timeout_seconds):
+        calls.append((method, path, payload))
+        if path == "/health":
+            return {"status": "ok"}
+        if method == "POST" and path == "/runs/pipeline":
+            assert payload["task"] == "Run through gateway"
+            assert payload["repo_path"] == str(tmp_path.resolve())
+            return {"id": payload["run_id"], "status": "queued"}
+        if path.endswith("/events"):
+            return {
+                "events": [
+                    {
+                        "id": 1,
+                        "event": "pipeline_status",
+                        "payload": {"message": "Planning: gateway step"},
+                    },
+                    {
+                        "id": 2,
+                        "event": "pipeline_trace",
+                        "payload": {
+                            "agent": "pipeline",
+                            "phase": "planning",
+                            "status": "started",
+                        },
+                    }
+                ]
+            }
+        if path.startswith("/runs/"):
+            run_id = path.split("/")[2]
+            return {
+                "id": run_id,
+                "status": "succeeded",
+                "payload": {
+                    "artifact_path": str(
+                        office_dir(tmp_path) / run_id / "company" / "final-output.json"
+                    ),
+                    "artifact": {
+                        "summary": "Gateway final summary",
+                        "metadata": {
+                            "run_id": run_id,
+                            "cost": {"total_tokens": 12, "total_cost_usd": 0.25},
+                        },
+                        "worker_results": {
+                            "security": {"status": "success"},
+                            "review": {"status": "success"},
+                        },
+                        "patch": None,
+                    },
+                },
+            }
+        raise AssertionError(f"unexpected gateway call: {method} {path}")
+
+    class ShouldNotRunPipeline:
+        def __init__(self, config) -> None:
+            raise AssertionError("direct pipeline fallback should not run")
+
+    monkeypatch.setattr(engine_module, "_desktop_gateway_url", fake_gateway_url)
+    monkeypatch.setattr(engine_module, "_gateway_json_request", fake_gateway_request)
+    monkeypatch.setattr(engine_module, "Pipeline", ShouldNotRunPipeline)
+
+    service = EngineService()
+    service.open_project(tmp_path)
+    result = asyncio.run(
+        service.run_pipeline(
+            "Run through gateway",
+            on_status=status_messages.append,
+            on_event=events.append,
+        )
+    )
+
+    assert result.summary == "Gateway final summary"
+    assert result.total_tokens == 12
+    assert result.total_cost_usd == 0.25
+    assert result.worker_statuses == {"security": "success", "review": "success"}
+    assert status_messages == ["Planning: gateway step"]
+    assert events == [{"agent": "pipeline", "phase": "planning", "status": "started"}]
+    assert any(call[1] == "/runs/pipeline" for call in calls)
+
+
+def test_start_and_stop_gateway_process(tmp_path, monkeypatch):
+    process_ref: dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 4321
+        exitcode = None
+
+        def __init__(self) -> None:
+            self.started = False
+            self.terminated = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def is_alive(self) -> bool:
+            return self.started and not self.terminated
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.exitcode = 0
+
+        def join(self, timeout=None) -> None:
+            return None
+
+    def fake_start_process(**kwargs):
+        assert kwargs["output_dir"] == office_dir(tmp_path)
+        assert kwargs["host"] == "127.0.0.1"
+        assert kwargs["port"] == 8733
+        process = FakeProcess()
+        process_ref["process"] = process
+        return process
+
+    def fake_gateway_request(base_url, method, path, payload=None, *, timeout_seconds):
+        process = process_ref.get("process")
+        if (
+            path == "/health"
+            and process is not None
+            and process.is_alive()
+        ):
+            return {"status": "ok"}
+        raise RuntimeError("not running")
+
+    monkeypatch.setattr(engine_module, "_start_desktop_gateway_process", fake_start_process)
+    monkeypatch.setattr(engine_module, "_gateway_json_request", fake_gateway_request)
+
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    started = service.start_gateway()
+    assert started.running is True
+    assert started.owned is True
+    assert started.pid == 4321
+
+    stopped = service.stop_gateway()
+    assert stopped.running is False
+    assert process_ref["process"].terminated is True
+
+
+def test_start_gateway_reuses_external_gateway(tmp_path, monkeypatch):
+    def should_not_start(**kwargs):
+        raise AssertionError("should not start a process when gateway is already healthy")
+
+    def fake_gateway_request(base_url, method, path, payload=None, *, timeout_seconds):
+        assert path == "/health"
+        return {"status": "ok"}
+
+    monkeypatch.setattr(engine_module, "_start_desktop_gateway_process", should_not_start)
+    monkeypatch.setattr(engine_module, "_gateway_json_request", fake_gateway_request)
+
+    service = EngineService()
+    service.open_project(tmp_path)
+    status = service.start_gateway()
+
+    assert status.running is True
+    assert status.owned is False
+    assert status.source == "external"
+
+
+def test_run_pipeline_with_patch_creates_final_output_approval(tmp_path, monkeypatch):
+    class FakePipeline:
+        def __init__(self, config) -> None:
+            self.config = config
+
+        async def run(
+            self,
+            task: str,
+            repo_path: str | None = None,
+            on_status=None,
+            on_event=None,
+        ):
+            return FinalOutput(
+                summary="Patch needs review",
+                patch="--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new\n",
+                metadata={
+                    "run_id": "run-patch-review",
+                    "cost": {"total_tokens": 1, "total_cost_usd": 0.01},
+                },
+            )
+
+    monkeypatch.setattr(engine_module, "Pipeline", FakePipeline)
+
+    service = EngineService()
+    service.open_project(tmp_path)
+    result = asyncio.run(service.run_pipeline("Generate patch"))
+
+    assert result.run_id == "run-patch-review"
+    approvals = service.list_pending_approvals()
+    assert len(approvals) == 1
+    approval = approvals[0]["data"]
+    assert approval["artifact"] == "final-output"
+    assert approval["title"] == "Review generated patch before PR"
+
+
+def test_create_pull_request_requires_approved_generated_patch(tmp_path):
+    service = EngineService()
+    service.open_project(tmp_path)
+    persist_company_artifact(
+        office_dir(tmp_path),
+        "run-needs-review",
+        "final-output",
+        {
+            "summary": "Patch summary",
+            "patch": "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new\n",
+            "metadata": {"run_id": "run-needs-review"},
+        },
+    )
+
+    with pytest.raises(PermissionError, match="reviewed before PR creation"):
+        asyncio.run(
+            service.create_pull_request_async(
+                "run-needs-review",
+                repo_ref="owner/repo",
+                head="feature/review",
+            )
+        )
+
+
+def test_create_pull_request_rejects_changed_patch_after_approval(tmp_path):
+    service = EngineService()
+    service.open_project(tmp_path)
+    artifact_path = persist_company_artifact(
+        office_dir(tmp_path),
+        "run-changed-review",
+        "final-output",
+        {
+            "summary": "Original patch",
+            "patch": "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new\n",
+            "metadata": {"run_id": "run-changed-review"},
+        },
+    )
+    approval_path = service._create_patch_review_approval(
+        run_id="run-changed-review",
+        artifact_path=artifact_path,
+        summary="Original patch",
+    )
+    assert approval_path is not None
+    service.approve(approval_path, "tester", "Reviewed original patch")
+    persist_company_artifact(
+        office_dir(tmp_path),
+        "run-changed-review",
+        "final-output",
+        {
+            "summary": "Changed patch",
+            "patch": "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+different\n",
+            "metadata": {"run_id": "run-changed-review"},
+        },
+    )
+
+    with pytest.raises(PermissionError, match="changed after approval"):
+        asyncio.run(
+            service.create_pull_request_async(
+                "run-changed-review",
+                repo_ref="owner/repo",
+                head="feature/changed-review",
+            )
+        )
+
+
+def test_create_pull_request_allows_approved_generated_patch(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+    artifact_path = persist_company_artifact(
+        office_dir(tmp_path),
+        "run-approved-review",
+        "final-output",
+        {
+            "summary": "Approved patch",
+            "patch": "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new\n",
+            "risk_report": [],
+            "metadata": {"run_id": "run-approved-review", "tests_run": []},
+        },
+    )
+    approval_path = service._create_patch_review_approval(
+        run_id="run-approved-review",
+        artifact_path=artifact_path,
+        summary="Approved patch",
+    )
+    assert approval_path is not None
+    service.approve(approval_path, "tester", "Reviewed generated patch")
+
+    async def fake_create_pr(owner, repo, title, body, *, head, base="main", draft=True):
+        assert (owner, repo) == ("owner", "repo")
+        assert head == "feature/approved-review"
+        assert base == "main"
+        assert draft is True
+        assert "Approved patch" in body
+        return "https://github.com/owner/repo/pull/123"
+
+    monkeypatch.setattr("parallel_agents.tools.github_tools.create_pr", fake_create_pr)
+
+    result = asyncio.run(
+        service.create_pull_request_async(
+            "run-approved-review",
+            repo_ref="owner/repo",
+            head="feature/approved-review",
+        )
+    )
+
+    assert result.url == "https://github.com/owner/repo/pull/123"
+    assert result.head == "feature/approved-review"
+
+
+def test_suggest_pr_branch_uses_artifact_title_when_on_main(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+    persist_company_artifact(
+        office_dir(tmp_path),
+        "run-branch",
+        "brief",
+        {
+            "title": "Ship Safer PR Flow",
+            "problem_statement": "Improve PR guidance.",
+        },
+    )
+    monkeypatch.setattr(EngineService, "_git_current_branch", staticmethod(lambda root: "main"))
+
+    branch = service.suggest_pr_branch("run-branch")
+
+    assert branch.startswith("pa/run-branch-")
+    assert "ship-safer-pr-flow" in branch
 
 
 def test_workspace_home_includes_office_diagnostics(tmp_path, monkeypatch):
@@ -197,6 +580,25 @@ def test_fix_office_setup_skips_init_when_already_initialized(tmp_path, monkeypa
 
     assert result.actions_taken == []
     assert result.suggested_commands == ["npm --version", "claude --version"]
+
+
+def test_onboard_project_uses_shared_onboarding_report(tmp_path, monkeypatch):
+    service = EngineService()
+    service.open_project(tmp_path)
+
+    def fake_build_onboarding_report(project_root, *, name, fix_setup, check_github_auth):
+        assert project_root == tmp_path.resolve()
+        assert name == tmp_path.name
+        assert fix_setup is True
+        assert check_github_auth is False
+        return {"status": "needs_github_auth", "ready_for_local_run": True}
+
+    monkeypatch.setattr(engine_module, "build_onboarding_report", fake_build_onboarding_report)
+
+    result = service.onboard_project()
+
+    assert result["status"] == "needs_github_auth"
+    assert result["ready_for_local_run"] is True
 
 
 def test_github_auth_status_authenticated(tmp_path, monkeypatch):

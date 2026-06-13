@@ -10,9 +10,24 @@ from parallel_agents.company_workflows import (
     build_roadmap,
     build_sprint_plan,
     create_product_brief,
+    issue_plan_items,
     recommend_tech_stack,
     render_pr_summary,
 )
+
+
+def test_issue_plan_items_prefers_normalized_then_falls_back():
+    # network artifact: normalized list under issue_plan is preferred
+    network = {"issue_plan": [{"title": "a"}], "issues": [{"title": "tracking-only"}]}
+    assert issue_plan_items(network) == [{"title": "a"}]
+
+    # desktop artifact: only the issues key (full dump) is used as fallback
+    desktop = {"issues": [{"title": "b", "body": "x"}]}
+    assert issue_plan_items(desktop) == [{"title": "b", "body": "x"}]
+
+    # empty / malformed shapes degrade to an empty list
+    assert issue_plan_items({}) == []
+    assert issue_plan_items({"issue_plan": None, "issues": "nope"}) == []
 
 
 def test_create_product_brief_normalizes_input():
