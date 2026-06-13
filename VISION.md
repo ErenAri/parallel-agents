@@ -2,9 +2,11 @@
 
 ## Product Thesis
 
-`parallel-agents` should become the execution engine for a no-code AI software company workflow.
+`parallel-agents` should become the execution engine for **Parallel Agents Office** — a no-code **AI software company OS**.
 
 The public product should feel less like a coding script and more like a small professional software company: a user brings a project idea, and the system runs discovery, planning, architecture, implementation, review, release, and post-release learning through coordinated AI agents.
+
+Framed after Andrej Karpathy's "org code" thesis, an agent organization is a *topology + rules* for how nodes communicate, decide, and escalate — declarable as code you can **fork, diff, and mutate**, and made fully **legible** so a human conductor can watch and steer it live, from the whole-org graph down to one agent's token stream.
 
 ## Product Name
 

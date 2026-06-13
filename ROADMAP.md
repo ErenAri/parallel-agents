@@ -2,7 +2,7 @@
 
 ## Current Product Direction
 
-Build `parallel-agents` into the execution engine for a no-code AI software company workflow.
+Build `parallel-agents` into the execution engine for **Parallel Agents Office** — a no-code **AI software company OS** that takes a project from idea to release through a coordinated, legible, and (ultimately) forkable org of AI agents.
 
 The near-term product path is:
 

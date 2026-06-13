@@ -1,12 +1,14 @@
-# parallel-agents
+# Parallel Agents Office
 
-A parallel multi-agent pipeline for code analysis and transformation, powered by Claude.
+**The AI software company OS — declare your agent org as code, fork it, and watch it run.**
 
-Fan out code analysis to 8 specialist AI agents running concurrently, then merge results into a unified report with patches, risk assessments, and PR summaries.
+Powered by Claude, Parallel Agents Office runs a *company of AI agents* over your codebase: specialist workers (security, test, perf, devops, arch, docs, code, review) fan out concurrently, then a judge merges their work into a unified report with patches, risk assessments, and PR summaries. The engine ships as the `parallel-agents` package.
 
 ## Product Direction
 
-`parallel-agents` is the execution engine for **Parallel Agents Office**: a no-code AI software company workflow that can take a project from idea to release.
+**Parallel Agents Office** is a no-code **AI software company OS**: bring a project idea, and a coordinated org of AI agents runs discovery, planning, architecture, implementation, review, and release. The `parallel-agents` package is its execution engine.
+
+The thesis (after Andrej Karpathy's "org code"): an organization is just a *topology + rules* for how nodes communicate, decide, and escalate — so it can be written as code, **forked, diffed, and mutated** — and made fully **legible**, so a human conductor can zoom from the whole-org graph down to a single agent's live token stream. Parallel Agents Office is that idea, local-first and reviewable.
 
 The long-term product goal is to coordinate specialist agents across the full software lifecycle:
 

@@ -6,7 +6,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
-- No changes yet.
+- Repositioned the product as **Parallel Agents Office - the AI software company OS** (declare your agent org as code, fork it, and watch it run). Updated README, VISION, ROADMAP, PROJECT_STATUS, and package/repository descriptions. The engine package name (`parallel-agents`) and CLI commands are unchanged.
 
 ## [0.4.4] - 2026-06-13
 

@@ -2,7 +2,7 @@
 
 ## Current Stage
 
-`parallel-agents` is now more than a parallel code-analysis CLI. It is becoming the engine for **Parallel Agents Office**, a no-code AI software company workflow that moves from idea to release through structured artifacts, approval gates, and measurable quality signals.
+`parallel-agents` is now more than a parallel code-analysis CLI. It is becoming the engine for **Parallel Agents Office**, a no-code **AI software company OS** that moves from idea to release through structured artifacts, approval gates, and measurable quality signals.
 
 The current release line is focused on local, reviewable workflows and a project-folder workspace. Hosted services, OAuth, and web/mobile dashboards are intentionally deferred.
 
