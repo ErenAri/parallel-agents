@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,43 @@ async def run_query_via_cli(
     effective_prompt = _with_inlined_system_prompt(prompt, options)
     cmd = _build_cli_command(cli_path, options)
     cwd = str(options.cwd) if options.cwd else None
+    stdout, stderr, returncode = await _run_cli_process(
+        cmd,
+        cwd=cwd,
+        stdin_text=effective_prompt,
+    )
+
+    if returncode != 0 and _is_missing_print_input_error(stderr):
+        logger.warning(
+            "Claude CLI rejected stdin prompt; retrying with positional prompt."
+        )
+        positional_cmd = _build_cli_command(
+            cli_path,
+            options,
+            positional_prompt=effective_prompt,
+        )
+        stdout, stderr, returncode = await _run_cli_process(
+            positional_cmd,
+            cwd=cwd,
+            stdin_text=None,
+        )
+
+    if returncode != 0:
+        stderr_excerpt = stderr.strip()[:2000] if stderr else "no stderr"
+        raise RuntimeError(
+            f"Claude CLI fallback failed with exit code {returncode}: {stderr_excerpt}"
+        )
+
+    return _parse_stream_json_output(stdout)
+
+
+async def _run_cli_process(
+    cmd: list[str],
+    *,
+    cwd: str | None,
+    stdin_text: str | None,
+) -> tuple[str, str, int]:
+    stdin = asyncio.subprocess.PIPE if stdin_text is not None else asyncio.subprocess.DEVNULL
 
     # Deliver the prompt over stdin rather than as a positional argument.
     # With --print, Claude CLI 2.1.x reads the prompt from stdin whenever stdin
@@ -37,28 +75,22 @@ async def run_query_via_cli(
     process = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
-        stdin=asyncio.subprocess.PIPE,
+        stdin=stdin,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout_bytes, stderr_bytes = await process.communicate(
-        input=effective_prompt.encode("utf-8")
-    )
+    input_bytes = stdin_text.encode("utf-8") if stdin_text is not None else None
+    stdout_bytes, stderr_bytes = await process.communicate(input=input_bytes)
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = stderr_bytes.decode("utf-8", errors="replace")
-
-    if process.returncode != 0:
-        stderr_excerpt = stderr.strip()[:2000] if stderr else "no stderr"
-        raise RuntimeError(
-            f"Claude CLI fallback failed with exit code {process.returncode}: {stderr_excerpt}"
-        )
-
-    return _parse_stream_json_output(stdout)
+    return stdout, stderr, process.returncode or 0
 
 
 def _build_cli_command(
     cli_path: str,
     options: ClaudeCodeOptions,
+    *,
+    positional_prompt: str | None = None,
 ) -> list[str]:
     cmd = [cli_path, "--output-format", "stream-json", "--verbose"]
 
@@ -109,6 +141,8 @@ def _build_cli_command(
             cmd.extend([f"--{flag}", str(value)])
 
     cmd.append("--print")
+    if positional_prompt is not None:
+        cmd.append(positional_prompt)
     return cmd
 
 
@@ -190,9 +224,13 @@ def _normalize_usage(usage: dict[str, Any]) -> dict[str, int]:
 def _find_claude_cli() -> str:
     found = shutil.which("claude")
     if found:
+        executable = _resolve_windows_claude_executable(Path(found))
+        if executable:
+            return str(executable)
         return found
 
     fallback_paths = [
+        Path.home() / ".local/bin/claude.exe",
         Path.home() / ".npm-global/bin/claude",
         Path.home() / ".local/bin/claude",
         Path("/usr/local/bin/claude"),
@@ -201,6 +239,30 @@ def _find_claude_cli() -> str:
         if path.exists() and path.is_file():
             return str(path)
     raise RuntimeError("Claude CLI binary not found for fallback path.")
+
+
+def _resolve_windows_claude_executable(found: Path) -> Path | None:
+    if os.name != "nt":
+        return None
+    if found.suffix.lower() not in {".cmd", ".bat", ".ps1"}:
+        return found if found.suffix.lower() == ".exe" else None
+
+    candidates = [
+        found.with_suffix(".exe"),
+        found.parent / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe",
+        Path.home() / ".local" / "bin" / "claude.exe",
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _is_missing_print_input_error(stderr: str) -> bool:
+    return (
+        "Input must be provided either through stdin or as a prompt argument"
+        in stderr
+    )
 
 
 def _with_inlined_system_prompt(prompt: str, options: ClaudeCodeOptions) -> str:

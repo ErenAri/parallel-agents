@@ -12,6 +12,8 @@ from parallel_agents.agents.planner import run_planner
 from parallel_agents.agents.workers.review import ReviewWorker
 from parallel_agents.claude_cli_fallback import _parse_stream_json_output
 from parallel_agents.claude_cli_fallback import _build_cli_command
+from parallel_agents.claude_cli_fallback import _is_missing_print_input_error
+from parallel_agents.claude_cli_fallback import _resolve_windows_claude_executable
 from parallel_agents.claude_cli_fallback import _with_inlined_system_prompt
 from parallel_agents.config import PipelineConfig, WorkerConfig
 from parallel_agents.models import (
@@ -216,6 +218,36 @@ def test_build_cli_command_uses_print_without_positional_prompt():
     # no end-of-options separator and no positional prompt argument.
     assert cmd[-1] == "--print"
     assert "--" not in cmd
+
+
+def test_build_cli_command_can_include_positional_prompt_for_retry():
+    from claude_code_sdk import ClaudeCodeOptions
+
+    options = ClaudeCodeOptions(model="haiku")
+    cmd = _build_cli_command("claude", options, positional_prompt="hello")
+
+    assert cmd[-2:] == ["--print", "hello"]
+
+
+def test_missing_print_input_error_detection():
+    assert _is_missing_print_input_error(
+        "Error: Input must be provided either through stdin or as a prompt argument when using --print"
+    )
+    assert not _is_missing_print_input_error("some other error")
+
+
+def test_resolve_windows_claude_executable_prefers_real_exe(tmp_path, monkeypatch):
+    npm_dir = tmp_path / "npm"
+    cli_dir = npm_dir / "node_modules" / "@anthropic-ai" / "claude-code" / "bin"
+    cli_dir.mkdir(parents=True)
+    cmd_shim = npm_dir / "claude.cmd"
+    cmd_shim.write_text("@echo off\n", encoding="utf-8")
+    real_exe = cli_dir / "claude.exe"
+    real_exe.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr("parallel_agents.claude_cli_fallback.os.name", "nt")
+
+    assert _resolve_windows_claude_executable(cmd_shim) == real_exe
 
 
 def test_inlined_system_prompt_merges_system_and_user():
