@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "parallel-agents"
-version = "0.4.3"
+version = "0.4.4"
 description = "Parallel multi-agent pipeline for code analysis and transformation."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -57,6 +57,8 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
     "ruff>=0.8.0",
+    "build>=1.2.0",
+    "twine>=6.0.0",
     "pyinstaller>=6.0.0",
     "mcp>=1.20.0",
     "fastapi>=0.115.0",

@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+- No changes yet.
+
+## [0.4.4] - 2026-06-13
+
 - Gateway shutdown lifecycle now uses FastAPI lifespan handlers (removes deprecated `on_event` usage).
 - CI now includes an evaluation-gate smoke check using `examples/eval_gate_results_example.json`.
 - Gateway auth now supports optional JWT HS256 bearer validation:

@@ -102,7 +102,7 @@ parallel-agents company roadmap --brief company/brief.json --output company/road
 parallel-agents company sprint --roadmap company/roadmap.json --milestone M1 --output company/sprint.json
 parallel-agents company plan --roadmap company/roadmap.json --repo owner/repo --dry-run --output company/issue-plan.json
 parallel-agents company release-check --repo ./my-project --output company/release-check.json
-parallel-agents company post-release --release-id v0.4.3 --release-check company/release-check.json --output company/post-release.json
+parallel-agents company post-release --release-id v0.4.4 --release-check company/release-check.json --output company/post-release.json
 parallel-agents company templates --roadmap company/roadmap.json --output company/templates.json
 parallel-agents company sync-labels --repo owner/repo --roadmap company/roadmap.json --dry-run
 parallel-agents company sync-milestones --repo owner/repo --roadmap company/roadmap.json --dry-run
