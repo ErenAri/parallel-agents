@@ -236,7 +236,7 @@ def test_missing_print_input_error_detection():
     assert not _is_missing_print_input_error("some other error")
 
 
-def test_resolve_windows_claude_executable_prefers_real_exe(tmp_path, monkeypatch):
+def test_resolve_windows_claude_executable_prefers_real_exe(tmp_path):
     npm_dir = tmp_path / "npm"
     cli_dir = npm_dir / "node_modules" / "@anthropic-ai" / "claude-code" / "bin"
     cli_dir.mkdir(parents=True)
@@ -245,9 +245,7 @@ def test_resolve_windows_claude_executable_prefers_real_exe(tmp_path, monkeypatc
     real_exe = cli_dir / "claude.exe"
     real_exe.write_text("", encoding="utf-8")
 
-    monkeypatch.setattr("parallel_agents.claude_cli_fallback.os.name", "nt")
-
-    assert _resolve_windows_claude_executable(cmd_shim) == real_exe
+    assert _resolve_windows_claude_executable(cmd_shim, is_windows=True) == real_exe
 
 
 def test_inlined_system_prompt_merges_system_and_user():

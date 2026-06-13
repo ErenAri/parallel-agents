@@ -241,8 +241,14 @@ def _find_claude_cli() -> str:
     raise RuntimeError("Claude CLI binary not found for fallback path.")
 
 
-def _resolve_windows_claude_executable(found: Path) -> Path | None:
-    if os.name != "nt":
+def _resolve_windows_claude_executable(
+    found: Path,
+    *,
+    is_windows: bool | None = None,
+) -> Path | None:
+    if is_windows is None:
+        is_windows = os.name == "nt"
+    if not is_windows:
         return None
     if found.suffix.lower() not in {".cmd", ".bat", ".ps1"}:
         return found if found.suffix.lower() == ".exe" else None
